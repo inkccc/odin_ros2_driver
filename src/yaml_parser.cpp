@@ -19,7 +19,7 @@ limitations under the License.
 #include <iomanip>
 
 #include <cstring>
-namespace odin_ros_driver {
+namespace odin_ros2_driver {
 
 // 构造函数：初始化配置文件路径
 YamlParser::YamlParser(const std::string& config_file)

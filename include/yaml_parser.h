@@ -22,7 +22,7 @@ limitations under the License.
 #include <yaml-cpp/yaml.h>
 #include "lidar_api.h"
 
-namespace odin_ros_driver {
+namespace odin_ros2_driver {
 
 // 参数值数据类型枚举，用于区分整型、浮点数组和整型数组
 enum class DataType {

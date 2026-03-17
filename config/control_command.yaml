@@ -110,14 +110,14 @@ register_keys:
 
   # ===== 数据录制（OLX 格式） =====
   # 以专有 OLX 格式录制 RGB 图像、里程计和 SLAM 点云数据
-  # 保存路径: {工作空间}/src/odin_ros_driver/recorddata/{录制开始时间}/
+  # 保存路径: {工作空间}/src/odin_ros2_driver/recorddata/{录制开始时间}/
   # 注意: 后处理时请复制整个文件夹，可用 MindCloud(TM) 软件进行处理
   # 0: 关闭; 1: 开启
   recorddata: 0
 
   # ===== 设备状态日志 =====
   # 将设备运行状态（温度、CPU 使用率、内存、各数据流帧率等）保存为 CSV 文件
-  # 保存路径: {工作空间}/src/odin_ros_driver/log/Driver_{启动时间}/Conn_{连接时间}/dev_status.csv
+  # 保存路径: {工作空间}/src/odin_ros2_driver/log/Driver_{启动时间}/Conn_{连接时间}/dev_status.csv
   # 0: 关闭; 1: 开启
   devstatuslog: 1
 
@@ -165,7 +165,7 @@ register_keys:
 
   # ===== SLAM 地图保存目录 =====
   # SLAM 模式下保存地图文件的目标目录
-  # 留空时使用默认路径: {工作空间}/src/odin_ros_driver/map/{驱动启动时间}/
+  # 留空时使用默认路径: {工作空间}/src/odin_ros2_driver/map/{驱动启动时间}/
   # 示例: "/home/user/maps/"
   mapping_result_dest_dir: ""
 
