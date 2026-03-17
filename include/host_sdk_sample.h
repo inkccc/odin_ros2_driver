@@ -761,7 +761,12 @@ void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
 
     msg.data.resize(image_size);
 
-    memcpy(msg.data.data(), stream->imageList[idx].pAddr, image_size);
+    // 左右+上下翻转（等价于180°旋转）：将像素数组倒序拷贝
+    const uint8_t* src = static_cast<const uint8_t*>(stream->imageList[idx].pAddr);
+    uint8_t* dst = msg.data.data();
+    for (size_t i = 0; i < image_size; ++i) {
+        dst[i] = src[image_size - 1 - i];
+    }
 
     #ifdef ROS2
         intensity_gray_pub_->publish(msg);
