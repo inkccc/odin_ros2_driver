@@ -21,9 +21,11 @@ limitations under the License.
 #include <cstring>
 namespace odin_ros_driver {
 
+// 构造函数：初始化配置文件路径
 YamlParser::YamlParser(const std::string& config_file)
     : config_file_(config_file) {}
 
+// 加载并解析 YAML 配置文件，提取 register_keys 节点下的所有参数
 bool YamlParser::loadConfig() {
     try {
         std::cerr << "Loading config file: " << config_file_ << std::endl;
@@ -152,18 +154,22 @@ bool YamlParser::loadConfig() {
     }
 }
 
+// 获取整型参数键值对映射表
 const std::map<std::string, int>& YamlParser::getRegisterKeys() const {
     return register_keys_;
 }
 
+// 获取自定义参数（custom_ 前缀）键值对映射表，支持整型和浮点数组
 const std::map<std::string, ParameterValue>& YamlParser::getCustomParameters() const {
     return custom_parameters_;
 }
 
+// 获取字符串类型参数键值对映射表
 const std::map<std::string, std::string>& YamlParser::getRegisterKeysStrVal() const {
     return register_keys_str_val_;
 }
 
+// 将当前已加载的所有配置参数输出到标准错误流，用于调试确认
 void YamlParser::printConfig() const {
     std::cerr << "Configuration Keys:" << std::endl;
     if (register_keys_.empty()) {
@@ -206,6 +212,7 @@ void YamlParser::printConfig() const {
     }
 }
 
+// 将所有 custom_ 自定义参数通过 lidar API 发送到设备
 bool YamlParser::applyCustomParameters(device_handle device) {
     bool success = true;
 
@@ -224,6 +231,7 @@ bool YamlParser::applyCustomParameters(device_handle device) {
     return success;
 }
 
+// 获取指定名称的自定义整型参数值，若不存在则返回默认值
 int YamlParser::getCustomParameterInt(const std::string& param_name, int default_value) const {
     auto it = custom_parameters_.find(param_name);
     if (it != custom_parameters_.end()) {

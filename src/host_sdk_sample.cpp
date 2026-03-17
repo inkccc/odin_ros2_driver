@@ -92,10 +92,12 @@ static std::deque<double> g_ptp_offset_buf;
 static std::atomic<double> g_ptp_delay_smooth{0.0};
 static std::atomic<double> g_ptp_offset_smooth{0.0};
 
+// 获取经过平滑处理的PTP延迟值
 double get_ptp_smoothed_delay() {
     return g_ptp_delay_smooth.load(std::memory_order_relaxed);
 }
 
+// 获取经过平滑处理的PTP时钟偏移值
 double get_ptp_smoothed_offset() {
     return g_ptp_offset_smooth.load(std::memory_order_relaxed);
 }
@@ -146,6 +148,7 @@ typedef struct  {
     std::mutex fps_mutex;
 } fpsHandle;
 
+// 更新帧计数器，记录当前时间用于FPS计算
 void update_count(fpsHandle* handle) {
     struct timespec now;
     std::lock_guard<std::mutex> lock(handle->fps_mutex);
@@ -158,7 +161,8 @@ void update_count(fpsHandle* handle) {
     handle->count++;
 }
 
-double cal_fps(fpsHandle* handle, const char* name, bool print = false) 
+// 计算并返回当前帧率（FPS），可选择性打印到日志
+double cal_fps(fpsHandle* handle, const char* name, bool print = false)
 {
     std::lock_guard<std::mutex> lock(handle->fps_mutex);
     if (handle->count < 2) {
@@ -186,27 +190,34 @@ static fpsHandle slam_cloud_rx_fps;
 static fpsHandle slam_odom_rx_fps;
 static fpsHandle slam_odom_highfreq_rx_fps;
 
+// ROS节点控制接口的具体实现类，管理DTOF子帧率、里程计TF发布及点云置信度阈值等参数
 class RosNodeControlImpl : public RosNodeControlInterface {
     public:
+        // 设置DTOF子帧采样间隔时间
         void setDtofSubframeODR(int interval) override {
             dtof_subframe_interval_time = interval;
         }
         
+        // 获取DTOF子帧采样间隔时间
         int getDtofSubframeODR() const override {
             return dtof_subframe_interval_time;
         }
-        
+
+        // 设置是否发布里程计到base_link的TF变换
         void setSendOdomBaseLinkTF(bool send_odom_baselink_tf) override {
             pub_odom_baselink_tf = send_odom_baselink_tf;
         }
 
+        // 返回是否发布里程计到base_link的TF变换
         bool sendOdomBaseLinkTF() const override {
             return pub_odom_baselink_tf;
         }
 
+        // 设置原始点云的置信度过滤阈值
         void setCloudRawConfidenceThreshold(int threshold) {
             cloud_raw_confidence_threshold = threshold;
         }
+        // 获取原始点云的置信度过滤阈值
         int cloudRawConfidenceThreshold() const {
             return cloud_raw_confidence_threshold;
         }
@@ -219,11 +230,12 @@ class RosNodeControlImpl : public RosNodeControlInterface {
     
 static RosNodeControlImpl g_rosNodeControlImpl;
 
+// 获取全局ROS节点控制接口实例的指针
 RosNodeControlInterface* getRosNodeControl() {
     return &g_rosNodeControlImpl;
 }
 
-// Return resident memory (RSS) in **megabytes** for a given PID
+// 读取指定进程的常驻内存（RSS）大小，返回值单位为MB
 double read_rss_mb(pid_t pid) {
     std::string path = "/proc/" + std::to_string(pid) + "/status";
     std::ifstream in(path);
@@ -240,6 +252,7 @@ double read_rss_mb(pid_t pid) {
     return kb / 1024.0;               // convert to MB
 }
 
+// 读取指定进程的比例内存（PSS）大小，返回值单位为MB
 double read_pss_mb(pid_t pid) {
     std::string path = "/proc/" + std::to_string(pid) + "/smaps_rollup";
     std::ifstream in(path);
@@ -256,7 +269,7 @@ double read_pss_mb(pid_t pid) {
     return kb / 1024.0;          // convert to MB
 }
 
-// Recursively collect child PIDs of the given pid
+// 递归收集指定进程的所有子进程PID
 void collect_children(pid_t pid, std::vector<pid_t>& all) {
     std::string task_path = "/proc/" + std::to_string(pid) +
                             "/task/" + std::to_string(pid) + "/children";
@@ -272,7 +285,7 @@ void clear_all_queues();
 
 static bool convert_calib_to_cam_in_ex(const std::string& calib_path, const std::filesystem::path& out_path);
 
-// Signal handler for Ctrl+C
+// 信号处理函数，响应SIGINT/SIGTERM信号执行安全关机并释放设备资源
 static void signal_handler(int signum) {
     if (signum == SIGINT || signum == SIGTERM) {
         #ifdef ROS2
@@ -350,7 +363,7 @@ static void signal_handler(int signum) {
     }
 }
 
-// Custom parameter monitoring function
+// 自定义参数监控线程函数，定期轮询设备参数并在保存地图时自动传输地图文件
 static void custom_parameter_monitor() {
     int last_save_map_val = -1;
     while (g_param_monitor_running && deviceConnected) {
@@ -429,7 +442,7 @@ static void custom_parameter_monitor() {
     }
 }
 
-// Process command from file
+// 从命令文件中读取并执行设备参数设置命令（如 set <param> <value>）
 static void process_command_file() {
     if (!std::filesystem::exists(g_command_file_path)) {
         return;
@@ -509,7 +522,7 @@ static void process_command_file() {
     }
 }
 
-// detect USB3.0
+// 检测指定USB设备是否连接在USB 3.0或更高版本的接口上
 bool isUsb3OrHigher(const std::string& vendorId, const std::string& productId) {
     std::string command = "lsusb -d " + vendorId + ":" + productId + " -v | grep 'bcdUSB'";
     
@@ -562,6 +575,7 @@ bool isUsb3OrHigher(const std::string& vendorId, const std::string& productId) {
     return version >= 3.0;
 }
 
+// 通过sysfs检测指定VID/PID的USB设备是否已连接到系统
 bool isUsbDevicePresent(const std::string& vendorId, const std::string& productId) {
     std::ifstream devicesList("/sys/bus/usb/devices");
     if (devicesList.is_open()) {
@@ -598,7 +612,7 @@ bool isUsbDevicePresent(const std::string& vendorId, const std::string& productI
     }
     return false;
 }
-// Convert calib.yaml to cam_in_ex.txt
+// 将calib.yaml中的相机内外参数转换并写入cam_in_ex.txt文件
 static bool convert_calib_to_cam_in_ex(const std::string& calib_path, const std::filesystem::path& out_path) {
     try {
         if (calib_path.empty()) {
@@ -715,7 +729,7 @@ static bool convert_calib_to_cam_in_ex(const std::string& calib_path, const std:
     }
 }
 
-// Get package share path
+// 获取ROS软件包的共享资源目录路径（兼容ROS1和ROS2）
 std::string get_package_share_path(const std::string& package_name) {
 #ifdef ROS2
     try {
@@ -732,6 +746,7 @@ std::string get_package_share_path(const std::string& package_name) {
 #endif
 }
 
+// 通过当前源文件路径向上查找含package.xml的软件包根目录
 std::string get_package_source_directory() {
     // 获取当前源文件的绝对路径
     std::filesystem::path current_file(__FILE__);
@@ -750,6 +765,7 @@ std::string get_package_source_directory() {
 }
 
 
+// 获取ROS软件包路径（兼容ROS1和ROS2）
 std::string get_package_path(const std::string& package_name) {
     #ifdef ROS2
         return ament_index_cpp::get_package_share_directory(package_name);
@@ -758,7 +774,7 @@ std::string get_package_path(const std::string& package_name) {
     #endif
 }
 
-// Clear all queues
+// 清空所有数据缓存队列并重置RGB图像状态标志
 void clear_all_queues() {
     // Reset state variables
     g_latest_bgr.reset();
@@ -766,7 +782,7 @@ void clear_all_queues() {
     g_has_rgb = false;
 }
 
-// Lidar data callback
+// 雷达数据回调函数，根据数据类型分发处理IMU、RGB、点云、里程计等各类传感器数据
 static void lidar_data_callback(const lidar_data_t *data, void *user_data)
 {
     // If device is not connected, ignore all data
@@ -1049,6 +1065,7 @@ static void lidar_data_callback(const lidar_data_t *data, void *user_data)
     }
 }
 
+// 雷达设备连接/断开回调函数，负责设备初始化、固件版本校验、流启动及断线清理
 static void lidar_device_callback(const lidar_device_info_t* device, bool attach)
 {
     int type = LIDAR_MODE_SLAM;
@@ -1590,6 +1607,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
     }
 }
 
+// 程序主入口，初始化ROS节点、加载配置参数、启动雷达系统并进入主循环
 int main(int argc, char *argv[])
 {
 #ifdef ROS2

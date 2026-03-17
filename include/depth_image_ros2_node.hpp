@@ -37,11 +37,14 @@ limitations under the License.
 #include <string>
 #include <memory>
 
+// 深度图生成 ROS2 节点：订阅原始点云和 RGB 图像，融合生成稠密深度图和彩色点云
 class DepthImageRos2Node : public rclcpp::Node
 {
 public:
+    // 构造函数：加载相机参数，初始化深度图转换器
     explicit DepthImageRos2Node(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
+    // 初始化：订阅话题，创建时间同步器和发布器（必须在构造后调用）
     void initialize();
 
 private:
@@ -69,17 +72,20 @@ private:
     std::unique_ptr<PointCloudToDepthConverter> depth_converter_;
 
 
+    // 从 ROS2 参数服务器加载相机内参、畸变系数和外参矩阵
     PointCloudToDepthConverter::CameraParams loadCameraParams();
 
+    // 时间近似同步回调：接收点云和 RGB 图像，生成深度图和彩色点云并发布
     void syncCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_msg,
                       // const sensor_msgs::msg::CompressedImage::ConstSharedPtr image_msg,
                       const sensor_msgs::msg::Image::ConstSharedPtr color_msg);
 
-
+    // 将深度图（32FC1）转换为 ROS2 Image 消息并发布
     void publishDepthImage(const cv::Mat &img,
                            const std_msgs::msg::Header &header,
                            const std::string &encoding = "32FC1");
 
+    // 将彩色 PCL 点云转换为 ROS2 PointCloud2 消息并发布
     void publishDepthCloud(const pcl::PointCloud<pcl::PointXYZRGB> &colored_cloud,
                            const std_msgs::msg::Header &header);
 };

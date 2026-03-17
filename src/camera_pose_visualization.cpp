@@ -28,12 +28,14 @@ using GeometryPoint = geometry_msgs::msg::Point;
 using GeometryPoint = geometry_msgs::Point;
 #endif
 
+// Eigen 三维向量转换为 ROS geometry_msgs::Point 消息类型
 void Eigen2Point(const Eigen::Vector3d& v, GeometryPoint& p) {
     p.x = v.x();
     p.y = v.y();
     p.z = v.z();
 }
 
+// 构造函数：初始化相机视锥体可视化对象，设置图像边界颜色和光心连接线颜色
 camera_pose_visualization::camera_pose_visualization(float r, float g, float b, float a)
     : m_marker_ns("camera_pose_visualization"), m_scale(0.3), m_line_width(0.03) {
     m_image_boundary_color.r = r;
@@ -46,6 +48,7 @@ camera_pose_visualization::camera_pose_visualization(float r, float g, float b, 
     m_optical_center_connector_color.a = a;
 }
 
+// 设置相机视锥体图像边界线的颜色（RGBA）
 void camera_pose_visualization::setImageBoundaryColor(float r, float g, float b, float a) {
     m_image_boundary_color.r = r;
     m_image_boundary_color.g = g;
@@ -53,6 +56,7 @@ void camera_pose_visualization::setImageBoundaryColor(float r, float g, float b,
     m_image_boundary_color.a = a;
 }
 
+// 设置从光心到图像角点的连接线颜色（RGBA）
 void camera_pose_visualization::setOpticalCenterConnectorColor(float r, float g, float b, float a) {
     m_optical_center_connector_color.r = r;
     m_optical_center_connector_color.g = g;
@@ -60,12 +64,15 @@ void camera_pose_visualization::setOpticalCenterConnectorColor(float r, float g,
     m_optical_center_connector_color.a = a;
 }
 
+// 设置相机视锥体的缩放比例
 void camera_pose_visualization::setScale(double s) {
     m_scale = s;
 }
+// 设置可视化线条宽度
 void camera_pose_visualization::setLineWidth(double width) {
     m_line_width = width;
 }
+// 添加普通轨迹边（绿色线段），连接两个三维位置点
 void camera_pose_visualization::add_edge(const Eigen::Vector3d& p0, const Eigen::Vector3d& p1) {
     Marker marker;
 
@@ -94,6 +101,7 @@ void camera_pose_visualization::add_edge(const Eigen::Vector3d& p0, const Eigen:
     m_markers.push_back(marker);
 }
 
+// 添加回环检测边（紫色粗线段），连接两个检测到回环的位置点
 void camera_pose_visualization::add_loopedge(const Eigen::Vector3d& p0, const Eigen::Vector3d& p1) {
     Marker marker;
 
@@ -125,6 +133,7 @@ void camera_pose_visualization::add_loopedge(const Eigen::Vector3d& p0, const Ei
 }
 
 
+// 添加相机位姿可视化（视锥体），根据位置和四元数姿态绘制相机框架
 void camera_pose_visualization::add_pose(const Eigen::Vector3d& p, const Eigen::Quaterniond& q) {
     Marker marker;
 
@@ -216,10 +225,12 @@ void camera_pose_visualization::add_pose(const Eigen::Vector3d& p, const Eigen::
     m_markers.push_back(marker);
 }
 
+// 清空所有已添加的可视化标记，准备下一帧更新
 void camera_pose_visualization::reset() {
     m_markers.clear();
 }
 
+// 将所有已添加的可视化标记通过指定 Publisher 发布为 MarkerArray 消息
 void camera_pose_visualization::publish_by( Publisher& pub, const Header& header ) {
     MarkerArray markerArray_msg;
 

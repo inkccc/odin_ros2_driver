@@ -1,501 +1,364 @@
-# Odin_ROS_Driver Readme
+# Odin ROS2 驱动 (odin_ros2_driver)
 
-ROS driver suite for Odin sensor modules (Manifold Tech Ltd.) 
+适用于 Manifold Tech Ltd. Odin1 传感器模块的 **ROS2 Humble** 驱动功能包。
 
-Odin1 wiki: https://manifoldtechltd.github.io/wiki/Odin1/Cover.html
+- 官方 Wiki：https://manifoldtechltd.github.io/wiki/Odin1/Cover.html
+- 支持平台：**Ubuntu 22.04.5 LTS** + **ROS2 Humble**（x86_64 / ARM aarch64）
 
-## Odin_ROS_Driver
+---
 
-Compatibility:
+## 重要声明
 
-● ROS 1(LTS Release: Noetic recommended)
+本驱动功能包提供 SLAM 点云应用的核心功能，面向特定使用场景。本软件仅供从事二次开发的技术专业人员使用。终端用户在实际部署环境中必须根据应用场景进行针对性优化和定制开发，以满足实际运营需求。
 
-● ROS 2(LTS Release: Humble recommended)
+---
 
-## Important Notice:
+## 1. 版本信息
 
-This driver package provides core functionality for point cloud SLAM applications and targets specific use cases. It is intended exclusively for technical professionals conducting secondary development. End users must perform scenario-specific optimization and custom development to align with operational requirements in practical deployment environments.
+| 项目 | 版本 |
+|------|------|
+| 驱动版本 | v0.9.0 |
+| 设备固件要求 | v0.10.0+ |
+| 支持系统 | Ubuntu 22.04.5 LTS |
+| ROS 版本 | ROS2 Humble |
 
-## 1. Version
+---
 
-Current version: v0.9.0
+## 2. 环境准备
 
-Required device firmware version: v0.10.0
+### 2.1 系统要求
 
-## 2. Preparation
+- **操作系统**：Ubuntu 22.04.5 LTS（Jammy Jellyfish）
+- **ROS 版本**：ROS2 Humble Hawksbill
+- **架构**：x86_64（Intel/AMD）或 ARM aarch64（Jetson、树莓派等）
 
-### 2.1 OS Requirement
+### 2.2 安装 ROS2 Humble
 
-● Ubuntu 20.04 for ROS Noetic and ROS2 Foxy;
+若尚未安装 ROS2 Humble，请参考官方文档：
+https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html
 
-● Ubuntu 22.04 for ROS2 Humble;
+快速安装（推荐）：
+```bash
+# 设置软件源
+sudo apt install software-properties-common curl
+sudo curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" | sudo tee /etc/apt/sources.list.d/ros2.list
 
-● Ubuntu 18.04 is currently not supported;
+# 安装 ROS2 Humble 桌面版
+sudo apt update && sudo apt install ros-humble-desktop
 
-● Ubuntu 24.04 is not officially supported but may work with some modifications.
+# 添加环境变量到 ~/.bashrc
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
 
-### 2.2 Dependencies
+### 2.3 安装系统依赖
 
-● Opencv >= 4.5.0(recommand 4.5.5/4.8.0. Make sure only one version of opencv is installed)
-
-● yaml-cpp
-
-● thread
-
-● OpenSSL
-
-● Eigen3
-
-### 2.3 Dependencies Install
-
-#### 2.3.1 System
-```shell
+```bash
 sudo apt update
-sudo apt-get install build-essential cmake git libgtk2.0-dev pkg-config libavcodec-dev libavformat-dev libswscale-dev
+sudo apt install -y \
+    libopencv-dev \
+    libyaml-cpp-dev \
+    libssl-dev \
+    libeigen3-dev \
+    libusb-1.0-0-dev \
+    libpcl-dev \
+    pkg-config
 ```
 
-#### 2.3.2 yaml-cpp
-```shell
-sudo apt update
-sudo apt install -y libyaml-cpp-dev
+OpenCV 版本要求 >= 4.5.0（推荐 4.5.5 或 4.8.0，请确保系统中只安装了一个版本）。
+
+### 2.4 安装 ROS2 相关依赖
+
+```bash
+sudo apt install -y \
+    ros-humble-cv-bridge \
+    ros-humble-image-transport \
+    ros-humble-pcl-conversions \
+    ros-humble-message-filters \
+    ros-humble-tf2 \
+    ros-humble-tf2-ros \
+    ros-humble-tf2-geometry-msgs \
+    ros-humble-visualization-msgs \
+    ros-humble-rviz2
 ```
 
-#### 2.3.3 libusb
-```shell
-sudo apt update
-sudo apt install -y libusb-1.0-0-dev
+---
+
+## 3. 设备连接
+
+### 3.1 USB 权限配置
+
+首次使用时，需配置 USB 设备访问权限：
+
+```bash
+# 创建 udev 规则文件
+sudo bash -c 'echo "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2207\", ATTR{idProduct}==\"0019\", MODE=\"0666\", GROUP=\"plugdev\"" > /etc/udev/rules.d/99-odin1.rules'
+
+# 重新加载 udev 规则
+sudo udevadm control --reload-rules && sudo udevadm trigger
+
+# 将当前用户添加到 plugdev 组
+sudo usermod -aG plugdev $USER
+# 注意：需要重新登录才能生效
 ```
 
-#### 2.3.4 opencv
-```shell
-sudo apt update
-sudo apt-get install libopencv-dev
+### 3.2 USB 3.0 要求
+
+- SLAM 模式下**必须**使用 USB 3.0 接口，以确保地图文件传输的可靠性
+- 若使用 USB 2.0，可在 `config/control_command.yaml` 中设置 `strict_usb3.0_check: 0` 跳过检查（不推荐）
+- 设备 USB ID：`2207:0019`
+
+---
+
+## 4. 编译
+
+### 4.1 创建工作空间并克隆功能包
+
+```bash
+mkdir -p ~/ros2_ws/src && cd ~/ros2_ws/src
+git clone <本仓库地址> odin_ros_driver
 ```
 
-#### 2.3.4 ROS install
+### 4.2 使用 colcon 编译
 
-For ROS Noetic installation, please refer to:
-[ROS Noetic installation instructions](https://wiki.ros.org/noetic/Installation)
+```bash
+cd ~/ros2_ws
+# 加载 ROS2 环境
+source /opt/ros/humble/setup.bash
 
-For ROS2 Foxy installation, please refer to:
-[ROS Foxy installation instructions](https://docs.ros.org/en/foxy/Installation/Ubuntu-Install-Debians.html)
+# 编译（将自动检测 x86_64 或 ARM 架构）
+colcon build --packages-select odin_ros_driver
 
-For ROS2 Humble installation, please refer to:
-[ROS Humble installation instructions](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)
-
-## 3. Preparation
-
-### 3.1 Create Udev rules 
-```shell
-sudo vim /etc/udev/rules.d/99-odin-usb.rules
-```
-Add the following content to the 99-odin-usb.rules file
-```shell
-SUBSYSTEM=="usb", ATTR{idVendor}=="2207", ATTR{idProduct}=="0019", MODE="0666", GROUP="plugdev"
-```
-Reload rules and reinsert devices
-```shell
-sudo udevadm control --reload
-sudo udevadm trigger
-```
-### 3.2 OS Requirement
-```shell
-git clone https://github.com/manifoldsdk/odin_ros_driver.git catkin_ws/src/odin_ros_driver
-```
-Note:
-Please clone the source code into the "[ros_workspace]/src/" folder, otherwise compilation errors will occur.
-
-### 3.3 make
-
-#### 3.3.1 ROS1 (Noetic for example):
-
-```shell
-source /opt/ros/noetic/setup.bash
-./script/build_ros.sh
+# 加载工作空间
+source install/setup.bash
 ```
 
-#### 3.3.2 ROS2 (Foxy for example):
+ARM 平台（Jetson、树莓派等）编译命令相同，CMake 会自动检测架构并链接对应的 `liblydHostApi_arm.a` 库。
 
-```shell
-source /opt/ros/foxy/setup.bash
-./script/build_ros2.sh
+---
+
+## 5. 启动驱动
+
+### 5.1 基本启动
+
+```bash
+cd ~/ros2_ws
+source install/setup.bash
+ros2 launch odin_ros_driver odin1.launch.py
 ```
 
-### 3.4 run:
+启动后将自动运行以下节点：
+- `host_sdk_sample`：主驱动节点，与 Odin1 设备建立 USB 连接
+- `pcd2depth_ros2_node`：深度图生成节点（需在配置文件中启用）
+- `cloud_reprojection_ros2_node`：点云重投影节点（需在配置文件中启用）
+- `rviz2`：可视化界面
 
-#### 3.4.1 ROS1 (Noetic for example):
+### 5.2 自定义参数启动
 
-```shell
-source [ros_workspace]/devel/setup.bash
-roslaunch odin_ros_driver [launch file]
-```
-● odin_ros_driver: package name;
+```bash
+# 使用自定义配置文件
+ros2 launch odin_ros_driver odin1.launch.py config_file:=/path/to/your/config.yaml
 
-● launch file: launch file;
-
-● ros_workspace: User's ROS environment workspace;
-```shell
-roslaunch odin_ros_driver odin1_ros1.launch
-```
-#### 3.4.2 ROS2 (Foxy for example):
-
-```shell
-source [ros2_workspace]/install/setup.bash
-ros2 launch odin_ros_driver [launch file]
-```
-● odin_ros_driver: package name;
-
-● launch file: launch file;
-
-● ros2_workspace: User's ROS2 environment workspace;
-
-ROS2 Demo Launch Instructions:
-```shell
-ros2 launch odin_ros_driver odin1_ros2.launch.py
+# 使用自定义 RViz 配置
+ros2 launch odin_ros_driver odin1.launch.py rviz_config:=/path/to/your.rviz
 ```
 
-### 3.5 Operation Mode:
+### 5.3 配置文件
 
-The operation mode can be configured via the `custom_map_mode` parameter in config/control_command.yaml.
+主要配置文件位于 `config/control_command.yaml`，各参数含义详见文件内注释。
 
-#### Odometry mode
+主要配置项一览：
 
-Set `custom_map_mode = 0` to enable odometry mode. In this mode, the map frame and odom frame share the same pose.
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `strict_usb3.0_check` | 0 | USB 3.0 强制检查（推荐生产环境开启） |
+| `use_host_ros_time` | 2 | 时间戳同步模式（0=设备时间，1=主机接收时间，2=PTP同步） |
+| `sendrgb` | 1 | 发布 BGR8 解码图像 |
+| `senddtof` | 1 | 发布原始 DTOF 点云 |
+| `sendcloudslam` | 1 | 发布 SLAM 点云 |
+| `sendcloudrender` | 1 | 发布彩色渲染点云 |
+| `senddepth` | 0 | 发布稠密深度图（计算量大，默认关闭） |
+| `sendreprojection` | 0 | 发布点云重投影图（默认关闭） |
+| `custom_map_mode` | 0 | 工作模式（0=里程计，1=SLAM建图，2=重定位） |
 
-#### SLAM mode
+---
 
-Set `custom_map_mode = 1` to enable slam mode. This mode provides a complete SLAM system that builds upon the Odometry Mode by adding **loop closure detection** and **map saving** capabilities.
+## 6. 发布的 ROS2 话题
 
-After launching the driver, odin1 will automatically perform mapping and cache map data. When the scene capture is complete, users need to execute `./set_param.sh save_map 1` in the driver's source directory to save all map data collected since the program started. The map will be saved to the location specified by the `mapping_result_dest_dir` and `mapping_result_file_name` parameters in config/control_command.yaml. If these parameters are not specified, default values will be used.
+设备连接后，驱动将发布以下话题：
 
-After the initial save, you can execute the command again to save a new map. Each save operation will generate a new map file. (Please allow at least 5 seconds between consecutive save operations)
+| 话题名称 | 消息类型 | 说明 |
+|----------|----------|------|
+| `/odin1/cloud_raw` | `sensor_msgs/PointCloud2` | 原始 DTOF 点云（XYZI + 置信度 + 时间偏移） |
+| `/odin1/cloud_slam` | `sensor_msgs/PointCloud2` | SLAM 全局点云地图（XYZRGB） |
+| `/odin1/cloud_render` | `sensor_msgs/PointCloud2` | 与 RGB 融合的彩色点云 |
+| `/odin1/image` | `sensor_msgs/Image` | 解码 RGB 图像（BGR8） |
+| `/odin1/image/compressed` | `sensor_msgs/CompressedImage` | 原始 JPEG 压缩图像 |
+| `/odin1/image_undistort` | `sensor_msgs/Image` | 去畸变 RGB 图像（需启用） |
+| `/odin1/imu` | `sensor_msgs/Imu` | IMU 数据（加速度 + 角速度） |
+| `/odin1/odometry` | `nav_msgs/Odometry` | 里程计位姿（位置 + 姿态 + 速度） |
+| `/odin1/odometry_high` | `nav_msgs/Odometry` | 高频里程计 |
+| `/odin1/path` | `nav_msgs/Path` | 历史轨迹路径（需启用 showpath） |
+| `/odin1/depth_img_completion` | `sensor_msgs/Image` | 稠密深度图 32FC1（需启用 senddepth） |
+| `/odin1/reprojected_image` | `sensor_msgs/Image` | 点云重投影可视化图（需启用 sendreprojection） |
+| `/tf` | `tf2_msgs/TFMessage` | 坐标变换（odom → base_link） |
 
-The map origin corresponds to the odom coordinate system's origin at the program's startup.
+### 原始点云格式说明
 
-##### Relocalization mode
-
-To enable relocalization, set `custom_map_mode = 2` and specify the absolute path to the pre-built map using the `relocalization_map_abs_path` parameter in config/control_command.yaml.
-
-Once launched, odin1 will initiate the relocalization process based on the current viewpoint and the specified map. To ensure a high success rate, it is recommended to starting within 1 meter ±10 degrees of the original position and orientation from the SLAM trajectory.
-
-Note that relocalization performance is highly environment-dependent. In highly distinctive scenes, successful matching may occur even beyond the 1m/10° range, while other environments may require more stringent conditions. We advise testing in your target environment to determine practical tolerances.
-
-If relocalization fails initially, the system will temporarily operate in a fallback SLAM mode (map saving is disabled in this state). During this time, you can freely move odin1. It will continue relocalization attempts in the background. Once successful, the TF between map and odom frames will be published. (Tip: Gently shaking or moving the device after initialization can help improve relocalization accuracy.)
-
-The following topics are published in the odom frame: `/odin1/cloud_slam, /odin1/odom, /odin1/highodom and /odin1/path`. To obtain these in the map frame, apply the TF from odom frame to map frame.
-
-## 4. File structure and data format
-### 4.1 File structure
-```shell
-Odin_ROS_Driver/                // ROS1/ROS2 driver package
-    3rdparty/                   // Third-party libraries
-    src/
-        host_sdk_sample.cpp     // Example source code
-        yaml_parser.cpp         // Source code for reading yaml parameters
-        rawCloudRender.cpp      // Source code for RenderCloud
-        depth_image_ros_node.cpp //depth_image_ros_node
-        depth_image_ros2_node.cpp //depth_image_ros2_node
-        pcd2depth_ros.cpp       //Source code for pcd2depth_ros
-        pcd2depth_ros2.cpp      //Source code for pcd2depth_ros2
-        pointcloud_depth_converter.cpp //Source code for pointcloud_depth_converter
-        cloud_reprojection_ros.cpp //Source code for cloud reprojection node (ROS1/ROS2)
-        cloud_reprojector.cpp   //Core logic for cloud reprojection
-    lib/
-        liblydHostApi_amd.a     // Static library for AMD platform
-        liblydHostApi_arm.a     // Static library for ARM platform
-    include/
-        host_sdk_sample.h       // Example header file
-        lidar_api_type.h        // API data structure header file
-        lidar_api.h             // API function declarations
-        yaml_parser.h           // Parameter file reading header file
-        rawCloudRender.h        // API about RenderCloud
-        data_logger.h           // LOG about save_data
-        depth_image_ros_node.hpp // depth_image_ros_node
-        depth_image_ros2_node.hpp // depth_image_ros2_node
-        pointcloud_depth_converter.hpp // pointcloud_depth_convert
-        cloud_reprojection_ros_node.hpp // cloud_reprojection_ros_node (ROS1/ROS2)
-        cloud_reprojector.hpp   // Core class for cloud reprojection
-    config/
-        control_command.yaml    // Control parameter file for driver
-        calib.yaml              // Machine calibration yaml，differ for each individual device. Retrieved from the device everytime it connects to ROS driver
-    launch_ROS1/
-        odin1_ros1.launch       // ROS1 launch file
-    launch_ROS2/
-        odin1_ros2.launch.py    // ROS2 launch file
-    script/
-        build_ros1.sh           // Installation script for ROS1
-        build_ros2.sh           // Installation script for ROS2
-    recorddata/                 // holds recorded data that can import into MindCloud
-    log/                        // holds log files
-        Driver_{timestamp}/     // holds all log folders for each time driver started
-            Conn_{timestamp}/   // holds all log files for each odin1 device connection
-                dev_status.csv  // device status log file
-    README.md                   // Usage instructions
-    CMakeLists.txt              // CMake build file
-    License                     // License file
+`/odin1/cloud_raw` 使用自定义点结构：
 ```
-### 4.2 File structure
-| Launch File Name         | Description |
-|--------------------------|-------------|
-| odin1_ros1.launch        | Launch file for ROS1 - Odin1 Basic Operations Demo |
-| odin1_ros2.launch.py     | Launch file for ROS2 - Odin1 Basic Operations Demo |
-
-
-### 4.3 ROS topics
-Internal parameters of the Odin ROS driver are defined in config/control_command.yaml. Below are descriptions of the commonly used parameters:
-
-| Topic               |control_command.yaml  | Detailed Description |
-|---------------------|----------------------|----------------------|
-| odin1/imu                     | sendimu           | Imu Topic |
-| odin1/image                   | sendrgb           | RGB Camera Topic, decoded from original jpeg data from device, bgr8 format |
-| odin1/image_undistort         | sendrgbundistort  | undistorted RGB Camera Topic, processed with calib.yaml from device |
-| odin1/image/compressed        | sendrgbcompressed | RGB Camera compressed Topic, original jpeg data from device |
-| odin1/cloud_raw               | senddtof          | Raw_Cloud Topic |
-| odin1/cloud_render            | sendcloudrender   | Render_Cloud Topic, processed with raw point cloud, rgb image, and calib.yaml from device |
-| odin1/cloud_slam              | sendcloudslam     | Slam_PointCloud Topic |
-| odin1/odometry                | sendodom          | Odom Topic |
-| odin1/odometry_high           | sendodom          | high frequency Odom Topic |
-| odin1/path                    | showpath          | Odom Path Topic |
-| tf                            | sendodom          | tf tree Topic |
-| odin1/depth_img_competetion   | senddepth         | Dense depth image Topic. Demo, high computing power required. One-to-one with odin1/image_undistort. To utilize the data please directly subscribe to this topic instead of echoing it. Original value is already depth data, no need for further convert. |
-| odin1/depth_img_competetion_cloud  | senddepth         | Dense Depth_Cloud Topic. Demo, high computing power required |
-| odin1/reprojected_image       | sendreprojection  | Reprojected cloud to image Topic. Projects cloud_slam to camera image using odometry. Processed on host device. |
-
-### 4.4 Data format
-
-1. The raw point cloud (cloud_raw) has the following fields:
+字段: x, y, z (float32), intensity (uint8), confidence (uint16), offset_time (float32)
 ```
-float32 x             // X axis, in meters
-float32 y             // Y axis, in meters
-float32 z             // Z axis, in meters
-uint8  intensity      // Reflectivity, range 0–255
-uint16 confidence     // Point confidence, actual value range from 0 to around 1300 in typical scene, higher value means more reliable. Recommanded filtering threshold is 30-35, should be adjusted accordingly.
-float32 offset_time   // Time offset relative to the base timestamp unit: s 
+- `confidence` 范围：0 ~ 1300，推荐过滤阈值：30 ~ 35
+- `offset_time`：相对于帧基准时间的偏移（秒）
+
+---
+
+## 7. 工作模式说明
+
+### 模式 0：里程计模式（Odometry）
+
+```yaml
+custom_map_mode: 0
+```
+- 仅输出实时位姿估计，不建图
+- 计算量最小，适合对实时性要求高的场景
+
+### 模式 1：SLAM 建图模式
+
+```yaml
+custom_map_mode: 1
+```
+- 完整 SLAM 系统，支持回环检测
+- 自动缓存地图数据
+
+**保存地图：**
+```bash
+# 运行期间执行保存命令
+./set_param.sh save_map 1
 ```
 
-To work with this custom format in PCL, first define the point type:
-```cpp
-/*** LS ***/
-namespace ls_ros {
-    struct EIGEN_ALIGN16 Point {
-        float x;
-        float y;
-        float z;
-        uint8_t intensity;
-        uint16_t confidence;
-        float offset_time;
-        EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-    };
-}  // namespace ls_ros
+地图默认保存至：`{工作空间}/src/odin_ros_driver/map/{启动时间}/`
 
-POINT_CLOUD_REGISTER_POINT_STRUCT(ls_ros::Point,
-      (float, x, x)
-      (float, y, y)
-      (float, z, z)
-      (uint8_t, intensity, intensity)
-      (uint16_t, confidence, confidence)
-      (float offset_time , offset_time)
-)
-```
-Then, you can easily convert a ROS sensor_msgs::PointCloud2 message into a PCL point cloud:
-```
-pcl::PointCloud<ls_ros::Point> ls_cloud;
-pcl::fromROSMsg(*msg, ls_cloud);
+也可通过配置文件指定：
+```yaml
+mapping_result_dest_dir: "/home/user/maps/"
+mapping_result_file_name: "my_room.bin"
 ```
 
-2. The slam point cloud (cloud_slam) and directly rendered point cloud (cloud_render) has the following fields:
-```
-float32 x             // X axis, in meters
-float32 y             // Y axis, in meters
-float32 z             // Z axis, in meters
-float32 rgb           // RGB value
-```
+### 模式 2：重定位模式（Relocalization）
 
-### 4.5 Other functionalities
-
-|control_command.yaml   | Detailed Description |
-|-----------------------|----------------------|
-| use_host_ros_time     | Time synchronization mode: 0 - use odin internal system time as data timestamp (typical and recommended); 1 - use host ROS time upon receive (not recommended for most users); 2 - align odin1 time to host time via NTP-like synchronization, timestamp is the sensor data reception time on host time axis. |
-| strict_usb3.0_check   | Strict USB3.0 check, if off, allow connection even if usb connection is below usb 3.0 |
-| recorddata            | Record data in specific format that can be imported into MindCloud(TM) for post-processing. Please be aware that this will consume a lot of storage space. Testing shows 9.5G for 10mins of data. |
-| devstatuslog          | Device status logging, currently save device status (soc temperature, cpu usage, ram usage, dtof sensor temp .etc) and data tx & rx rate to devstatus.csv under log folder. A new file will be created every time the driver is started. |
-| showcamerapose        | Display Camera Pose and Field of View. |
-| custom_map_mode        | Operation Modes: Mode 0 - Odometry mode: The map frame and odom frame share the same pose. Mode 1 - Mapping (with loop closure) mode: This mode supports map saving. Mode 2 - Relocalization mode: Requires specifying the absolute path to the map file. After successful relocalization, it will output the TF relationship between the map and odom frames.|
-| custom_init_pos        | Initialization Position (currently unused). |
-| relocalization_map_abs_path        | Absolute Path to Map File: Used for relocalization mode. |
-| mapping_result_dest_dir and mapping_result_file_name| Path and Name for Saving Maps in Mapping Mode: If not specified, default values will be used. |
-
-## 5. FAQ
-### 5.1 Segmentation fault upon re-launching host SDK
-**Error Message**  
-No device connected after 60 seconds 
-
-**Solution**  
-1. Please power on Odin module again # Disconnect and reconnect odin power
-
-2. Reinitialize Odin SDK # Execute SDK after device reboot
-
-
-### 5.2 Library binding failure during compilation
-
-**Error Message**  
-ld: cannot find -llydHostApi or symbol lookup errors
-
-**Resolution** 
-
-1. Clean previous build artifacts
-
-ROS1 
-```shell
-rm -rf devel/ build/  
-``` 
-ROS2
-```shell
-rm -rf devel/ install/ log/ 
-``` 
-2. Re-run script installation
-
-### 5.3 Docker GUI passthrough failure
-
-**Error Message**  
-Unable to open X display or No protocol specified
-
-**Resolution** 
-```shell
-xhost + #This command enables graphical passthrough to Docker containers
-``` 
-
-### 5.4 ROS driver exit with get version failed error
-
-**Error Message**  
-```shell
-<ERROR><api.cpp:lidar_get_version:672>: get device version fail.
-get version failed.
+```yaml
+custom_map_mode: 2
+relocalization_map_abs_path: "/home/user/maps/my_room.bin"
 ```
 
-**Resolution** 
+- 加载已有地图进行定位，无需重新建图
+- **启动要求**：初始位置需在建图起点 **1 米以内、±10° 角度范围**内
+- 重定位失败时自动退回 SLAM 模式
+- 成功后发布 `map → odom` 坐标变换
 
-Device firmware version is too low, please update to latest version.
+---
 
+## 8. 深度图功能说明
 
-### 5.5 RVIZ has not responded for a long time
+启用稠密深度图补全：
 
-**Error Message**  
-Rviz does not respond, and after a while the terminal prints Device disconnected, waiting for reconnection...
-
-**Resolution** 
-
-Please power on Odin module again
-
-### 5.6 Device not responding
-
-**Error Message**  
-Missed ok response from device,probably wrong interaction procedure.
-
-**Resolution** 
-
-Please adopt the solution mentioned in 5.1
-
-### 5.7 Device has no external calibration file 
-
-**Error Message**  
-ERROR：Missing camera node 'cam_0'
-
-**Resolution** 
-
-Please plug and unplug the USB again
-
-### 5.8 ROS Driver report device disconnected immediately after stream started
-
-**Error Message**  
-
-```shell
-Device ready and streams activated
-Device detaching...
-Wating for device reconnection...
-Device disconnected, waiting for reconnection...
+```yaml
+senddepth: 1
 ```
 
-**Reason**
+**工作原理**：
+1. 订阅 `/odin1/cloud_raw`（稀疏点云）和 `/odin1/image`（RGB 图像）
+2. 将点云投影到相机坐标系生成稀疏深度图
+3. 上采样至原始分辨率（1600×1296），并用 Sobel 梯度过滤边缘噪声
+4. 发布 `32FC1` 格式深度图（单位：米）
 
-Mostly common on ros2 environment and connected to complex network environment, such as office wifi & ethernet. ROS2 default to broadcast, and complex network environment will cause ros2 publish to block, leading to device disconnection.
+**注意**：此功能在主机端进行计算，运算量较大，可能影响整体性能。
 
-**Resolution** 
+---
 
-If cross-device communication is not required, please restrict ros2 to localhost only with:
-```shell
-export ROS_LOCALHOST_ONLY=1
+## 9. 数据录制功能说明
+
+启用 OLX 格式数据录制：
+
+```yaml
+recorddata: 1
 ```
 
-If cross-device communication is required, please simplify the network environment as much as possible. Mini local network with only required devices is recommended.
+录制的数据包括 RGB 图像、里程计和 SLAM 点云，以专有 OLX 格式保存，可用 MindCloud(TM) 软件进行后处理。
 
-### 5.9 ROS Driver died immediately after stream started
+**保存路径**：`{工作空间}/src/odin_ros_driver/recorddata/{录制开始时间}/`
 
-**Error Message**  
+> **注意**：后处理时请完整复制整个文件夹，不要只复制部分文件。
 
-```shell
-Device ready and streams activated
-[host_sdk_sample-2] process has died ......
+---
+
+## 10. 目录结构
+
+```
+odin_ros_driver/
+├── CMakeLists.txt           # CMake 构建配置（仅支持 ROS2 Humble）
+├── package.xml              # ROS2 功能包描述文件
+├── config/
+│   └── control_command.yaml # 驱动控制参数配置文件
+├── launch/
+│   └── odin1.launch.py      # ROS2 启动文件
+├── rviz/
+│   └── odin_ros2.rviz       # RViz2 可视化配置文件
+├── src/                     # C++ 源文件
+│   ├── host_sdk_sample.cpp       # 主驱动节点
+│   ├── yaml_parser.cpp           # YAML 配置解析器
+│   ├── rawCloudRender.cpp        # 原始点云彩色渲染
+│   ├── camera_pose_visualization.cpp # 相机位姿可视化
+│   ├── depth_image_ros2_node.cpp # 深度图 ROS2 节点
+│   ├── pcd2depth_ros2.cpp        # 深度图节点入口
+│   ├── pointcloud_depth_converter.cpp # 点云转深度图核心算法
+│   ├── cloud_reprojection_ros.cpp    # 点云重投影 ROS2 节点
+│   └── cloud_reprojector.cpp         # 点云重投影核心算法
+├── include/                 # C++ 头文件
+├── lib/
+│   ├── liblydHostApi_amd.a  # x86_64 预编译 SDK 库
+│   └── liblydHostApi_arm.a  # ARM 预编译 SDK 库
+└── set_param.sh             # 运行时参数设置脚本（如保存地图）
 ```
 
-**Test**
+---
 
-Disable odin1/image	with sendrgb = 0 in control_command.yaml and try again. If the driver now works, it is likely that the issue is related to multiple version of opencv is installed on the system.
+## 11. 常见问题
 
-**Resolution** 
+### 问题 1：设备无法连接
 
-Purge the unused version of opencv and maintain a single complete version, then rebuild the driver and try again.
+- 检查 USB 线是否为 USB 3.0 规格（蓝色接口）
+- 检查 udev 规则是否正确配置：`lsusb | grep 2207`
+- 重新登录以使 plugdev 组权限生效
 
-### 5.10 ROS Driver printing "TF_OLD_DATA ignoring data" warning
+### 问题 2：编译报错 "Could not find lydHostApi library"
 
-**Error Message**  
+- 确认 `lib/` 目录下存在对应架构的库文件（`liblydHostApi_amd.a` 或 `liblydHostApi_arm.a`）
+- x86_64 系统使用 amd 库，ARM 系统使用 arm 库
 
-```shell
-[rviz2-3] Warning: TF_OLD_DATA ignoring data from the past for frame odin1_base_link at time 20.547632 according to authority Authority undetectable
-[rviz2-3] Possible reasons are listed at http://wiki.ros.org/tf/Errors%20explained
-[rviz2-3]          at line 294 in ./src/buffer_core.cpp
-```
+### 问题 3：点云在 RViz2 中不显示
 
-**Reason**
+- 确认 `send_odom_baselink_tf: 1`（默认已开启）
+- 在 RViz2 中将 Fixed Frame 设置为 `odom`
 
-This is a ros & rviz feature to warn user that some tf data is being ignored due to timestamp conflicts. It happens when user keeps ros driver running and power-cycles odin device, which cause odin's internal system time being reset and now data timestamps conflicts with old data recieved by rviz during last run.
+### 问题 4：SLAM 模式下 USB 传输不稳定
 
-**Resolution** 
+- 必须使用 USB 3.0 接口，避免使用 USB HUB
+- 可设置 `strict_usb3.0_check: 1` 强制检查
 
-There's a reset button on bottom of rviz gui. Click on this button will reset rviz's internal state and stop the warning.
+### 问题 5：时间戳不同步
 
-### 5.11 ROS Driver printing "unknown cmd code: xx" error
+- 推荐使用 `use_host_ros_time: 2`（PTP 类同步，默认值）
+- 若需使用纯设备时间，设置为 `use_host_ros_time: 0`
 
-**Error Message**  
+---
 
-```shell
-<ERROR><api.cpp:cmd_data_deal:418>: unknow command code 21.
-```
+## 12. 技术支持
 
-**Reason**
-
-This is due to ros driver version mismatch with device firmware version, resulting in ros driver unable to decode new data added in newer firmware.
-
-**Resolution** 
-
-Please make sure you are using most up-to-date ros driver and device firmware.
-
-## 6.  Contact Information​​
-
-You can contact our support through support@manifoldtech.cn
-
-To help diagnose the issue, please provide the following details to our FAE engineer:
-
-1. ​Current firmware version​​ 
-```shell
-[device_version_capture]: ros_driver_version: [Version Number]
-``` 
-2. ​Photos of power adapter and converter cable​​ in use.
-
-3. Does the issue happen occasionally or consistently?
-
-4. Provide images of the problem scenario.
-
-5. Did the troubleshooting methods in ​​Section V​​ resolve the issue?
-
-6. Expected timeline for issue resolution.
+- **邮件支持**：support@manifoldtech.cn
+- **官方 Wiki**：https://manifoldtechltd.github.io/wiki/Odin1/Cover.html
+- **许可证**：Apache License 2.0
+- **版权**：Copyright 2025 Manifold Tech Ltd.

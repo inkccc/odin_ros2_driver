@@ -24,14 +24,14 @@ limitations under the License.
 
 namespace odin_ros_driver {
 
-// Data type enum for supporting different value types
+// 参数值数据类型枚举，用于区分整型、浮点数组和整型数组
 enum class DataType {
     INT_TYPE,
     FLOAT_ARRAY_TYPE,
     INT_ARRAY_TYPE,
 };
 
-// Generic parameter value holder
+// 通用参数值容器，以字节数组形式存储不同类型的参数值
 struct ParameterValue {
     DataType type;
     std::vector<uint8_t> data;
@@ -59,18 +59,29 @@ struct ParameterValue {
     }
 };
 
+// YAML 配置解析器：读取 control_command.yaml，提取 register_keys 下的各类参数
+// 支持整型参数、字符串参数（路径等）和以 custom_ 为前缀的设备自定义参数
 class YamlParser {
 public:
+    // 构造函数，传入配置文件路径
     YamlParser(const std::string& config_file);
 
+    // 加载并解析配置文件
     bool loadConfig();
+    // 获取整型参数映射表
     const std::map<std::string, int>& getRegisterKeys() const;
+    // 获取字符串参数映射表
     const std::map<std::string, std::string>& getRegisterKeysStrVal() const;
+    // 获取自定义参数映射表
     const std::map<std::string, ParameterValue>& getCustomParameters() const;
+    // 打印所有已加载参数（用于调试）
     void printConfig() const;
+    // 将所有自定义参数通过 lidar API 发送到设备
     bool applyCustomParameters(device_handle device);
+    // 获取指定名称的自定义整型参数，不存在则返回默认值
     int getCustomParameterInt(const std::string& param_name, int default_value) const;
 
+    // 获取 custom_map_mode 参数（地图工作模式）
     int getCustomMapMode(int default_value) const {
         auto it = custom_parameters_.find("map_mode");
         if (it != custom_parameters_.end() && it->second.type == DataType::INT_TYPE) {

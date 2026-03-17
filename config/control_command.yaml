@@ -1,82 +1,176 @@
 register_keys:
-  # if off, allow connection even if usb connection is below usb 3.0
-  # ATTENTION: usb 3.0 is always recommended, as advance functionality like SLAM mode requires usb 3.0 for reliable map file transfer
-  strict_usb3.0_check: 0  # 0: off: 1: on;
+  # ===== USB 连接检查 =====
+  # 是否强制要求 USB 3.0 连接
+  # 0: 关闭（即使 USB 2.0 也允许连接，但 SLAM 模式下可能不稳定）
+  # 1: 开启（非 USB 3.0 连接时拒绝启动，推荐在生产环境中使用）
+  # 注意：SLAM 模式下建议使用 USB 3.0，以确保地图文件传输可靠性
+  strict_usb3.0_check: 0
 
-  # 0: use odin internal system time as data time stamp, typical and recommended;
-  # 1: use host ros time (upon receive) as data time stamp, only use if you specifically require this setup, not recommended for most users
-  # 2: align odin1 time to host time, timestamp is the sensor data reception time on host time axis
+  # ===== 时间戳同步模式 =====
+  # 控制数据时间戳的来源和同步方式
+  # 0: 使用设备内部时间（推荐，时间戳最准确）
+  # 1: 使用主机 ROS 时间（接收时打时间戳，不推荐，会引入网络延迟误差）
+  # 2: 将设备时间对齐到主机时间轴（类 PTP 同步，时间戳为主机时间轴上的接收时刻）
   use_host_ros_time: 2
 
-  streamctrl: 1           # 0: off; 1: on
+  # ===== 数据流总开关 =====
+  # 0: 停止所有数据流
+  # 1: 开启数据流（需要同时开启下方各具体数据流才能生效）
+  streamctrl: 1
 
-  # original rgb data in jpeg format from device
-  sendrgbcompressed: 1    # 0: off; 1: on
+  # ===== RGB 图像（压缩格式） =====
+  # 发布原始 JPEG 压缩图像，直接来自设备，带宽消耗最低
+  # 话题: /odin1/image/compressed
+  # 0: 关闭; 1: 开启
+  sendrgbcompressed: 1
 
-  # RGB data, decoded from original jpeg data from device, bgr8 format
-  # Processed on host device
-  sendrgb: 1              # 0: off; 1: on
+  # ===== RGB 图像（解码格式） =====
+  # 发布解码后的 BGR8 格式图像，在主机端进行 JPEG 解码
+  # 话题: /odin1/image
+  # 依赖: sendrgbcompressed 必须开启
+  # 0: 关闭; 1: 开启
+  sendrgb: 1
 
-  # undistort rgb image processed from decoded rgb data.
-  # depends on sendrgb. related camera parameters can be found in ws/src/odin_ros_driver/config/calib.yaml
-  # Processed on host device
-  sendrgbundistort: 0     # 0: off; 1: on.
+  # ===== RGB 图像（去畸变） =====
+  # 发布去畸变后的 RGB 图像，基于 calib.yaml 中的相机标定参数进行校正
+  # 话题: /odin1/image_undistort
+  # 依赖: sendrgb 必须开启
+  # 标定参数来源: config/calib.yaml（设备连接后自动生成）
+  # 0: 关闭; 1: 开启
+  sendrgbundistort: 0
 
-  # IMU data
-  sendimu: 1              # 0: off; 1: on
+  # ===== IMU 数据 =====
+  # 发布 IMU 惯性测量数据（加速度计 + 陀螺仪）
+  # 话题: /odin1/imu
+  # 0: 关闭; 1: 开启
+  sendimu: 1
 
-  # Odometry data
-  sendodom: 1             # 0: off; 1: on
+  # ===== 里程计数据 =====
+  # 发布设备位姿估计（位置 + 姿态四元数 + 速度 + 协方差）
+  # 话题: /odin1/odometry
+  # 0: 关闭; 1: 开启
+  sendodom: 1
 
-  # TF from odom to base_link. Leave it on unless you specifically need it off.
-  # ATTENTION: critical for rviz to show cloud_raw.
-  send_odom_baselink_tf: 1 # 0: off; 1: on.
+  # ===== 里程计到 base_link 的 TF 变换 =====
+  # 发布 odom → base_link 的 TF 坐标变换
+  # 对于在 RViz2 中正确显示 cloud_raw 点云至关重要
+  # 除非有特殊需求，请保持开启
+  # 0: 关闭; 1: 开启
+  send_odom_baselink_tf: 1
 
-  # raw dtof data
-  senddtof: 1             # 0: off; 1: on
-  cloud_raw_confidence_threshold: 35 # please refer to readme for more details
-  
-  # dtof sensor frame rate. Supported values: 100 (10fps) or 145 (14.5fps)
-  # Higher frame rate provides smoother point cloud data but may increase data bandwidth
-  # Note: value is multiplied by 10 (e.g., 145 means 14.5fps)
-  dtof_fps: 100           # 100: 10fps; 145: 14.5fps
+  # ===== 原始 DTOF 点云 =====
+  # 发布原始飞行时间（DTOF）测距点云数据
+  # 话题: /odin1/cloud_raw
+  # 点云格式: (x, y, z, intensity, confidence, offset_time)
+  # 0: 关闭; 1: 开启
+  senddtof: 1
 
-  # slam cloud data
-  sendcloudslam: 1        # 0: off; 1: on
+  # ===== 原始点云置信度阈值 =====
+  # 过滤低置信度点，数值越高过滤越严格
+  # 置信度范围: 0 ~ 1300
+  # 推荐值: 30 ~ 35（过滤噪点的同时保留足够的有效点）
+  # 过低会引入大量噪点，过高会导致有效点丢失
+  cloud_raw_confidence_threshold: 35
 
-  # processed with raw point cloud, rgb image, and calib.yaml from device
-  # Processed on host device
-  sendcloudrender: 1      # 0: off; 1: on
+  # ===== DTOF 传感器帧率 =====
+  # 控制 DTOF 传感器的采样帧率
+  # 100: 10 fps（较低帧率，适合静态场景，数据带宽较小）
+  # 145: 14.5 fps（较高帧率，适合动态场景，但增加数据带宽）
+  # 注意: 数值单位为实际帧率 × 10
+  dtof_fps: 100
 
-  # depth completion demo, high computing resource usage. 
-  # for more information please refer to the readme file.
-  # Processed on host device
-  senddepth: 0            # 0: off; 1: on
+  # ===== SLAM 点云 =====
+  # 发布由 SLAM 系统构建的全局点云地图
+  # 话题: /odin1/cloud_slam
+  # 点云格式: (x, y, z, rgb)
+  # 0: 关闭; 1: 开启
+  sendcloudslam: 1
 
-  # cloud reprojection demo, projects cloud_slam to camera image using odometry
-  # Processed on host device
-  sendreprojection: 0    # 0: off; 1: on
+  # ===== 彩色渲染点云 =====
+  # 将原始 DTOF 点云与 RGB 相机图像融合，生成彩色点云
+  # 话题: /odin1/cloud_render
+  # 在主机端处理，依赖 calib.yaml 中的相机外参
+  # 0: 关闭; 1: 开启
+  sendcloudrender: 1
 
-  # record rgb, odometry, and slam cloud data as proprietary olx format for further processing in MindCloud(TM) software. 
-  # save path: ws/src/odin_ros_driver/recorddata/{record_start_time}/
-  # ATTENTION: please copy the full folder for post-processing.
-  recorddata: 0           # 0: off; 1: on
+  # ===== 稠密深度图补全 =====
+  # 将稀疏点云投影到图像平面并生成稠密深度图
+  # 话题: /odin1/depth_img_completion（32FC1 格式）
+  # 主机端处理，运算量较大，可能影响整体性能
+  # 详情参见 README 文档中的深度图说明章节
+  # 0: 关闭; 1: 开启
+  senddepth: 0
 
-  # Save device runtime status info to ws/src/odin_ros_driver/log/Driver_{drvier_start_time}/Conn_{device_connection_time}/dev_status.csv
-  devstatuslog: 1         # 0: off; 1: on.
+  # ===== 点云重投影 =====
+  # 使用里程计位姿将 SLAM 点云投影到相机图像平面
+  # 话题: /odin1/reprojected_image（BGR8 图像）
+  # 主机端处理
+  # 0: 关闭; 1: 开启
+  sendreprojection: 0
 
-  save_log: 0 # 0: off; 1: on; 
+  # ===== 数据录制（OLX 格式） =====
+  # 以专有 OLX 格式录制 RGB 图像、里程计和 SLAM 点云数据
+  # 保存路径: {工作空间}/src/odin_ros_driver/recorddata/{录制开始时间}/
+  # 注意: 后处理时请复制整个文件夹，可用 MindCloud(TM) 软件进行处理
+  # 0: 关闭; 1: 开启
+  recorddata: 0
 
-  # raw dtof sensor intensity data in gray format, mostly for debug purpose.
-  pubintensitygray: 0     # 0: off; 1: on
+  # ===== 设备状态日志 =====
+  # 将设备运行状态（温度、CPU 使用率、内存、各数据流帧率等）保存为 CSV 文件
+  # 保存路径: {工作空间}/src/odin_ros_driver/log/Driver_{启动时间}/Conn_{连接时间}/dev_status.csv
+  # 0: 关闭; 1: 开启
+  devstatuslog: 1
 
-  showpath: 0             # 0: off; 1: on
-  showcamerapose: 0       # 0: off; 1: on
-  
-  custom_map_mode: 0      # 0: Odometry mode 1: SLAM mode 2: Relocalization mode
+  # ===== SDK 调试日志 =====
+  # 开启底层 SDK 的详细调试日志输出
+  # 建议仅在排查问题时临时开启
+  # 0: 关闭; 1: 开启
+  save_log: 0
+
+  # ===== 强度灰度图 =====
+  # 发布原始 DTOF 传感器强度数据的灰度图像，主要用于调试
+  # 0: 关闭; 1: 开启
+  pubintensitygray: 0
+
+  # ===== 轨迹路径显示 =====
+  # 在 RViz2 中发布并显示设备运动轨迹路径
+  # 0: 关闭; 1: 开启
+  showpath: 0
+
+  # ===== 相机位姿可视化 =====
+  # 在 RViz2 中以相机视锥体形式显示当前相机位姿
+  # 0: 关闭; 1: 开启
+  showcamerapose: 0
+
+  # ===== 工作模式选择 =====
+  # 0: 里程计模式（Odometry）   - 仅输出实时位姿估计，不建图，计算量最小
+  # 1: SLAM 建图模式            - 完整 SLAM 系统，支持回环检测，自动缓存地图数据
+  #                              保存地图命令: ./set_param.sh save_map 1
+  # 2: 重定位模式（Relocalization）- 加载已有地图进行定位，需设置 relocalization_map_abs_path
+  #                              初始位置需在建图起点 1m 以内、±10° 角度范围内
+  #                              重定位失败时自动退回 SLAM 模式
+  custom_map_mode: 0
+
+  # ===== 初始位姿设置 =====
+  # 格式: [x, y, z, qx, qy, qz, qw]（位置单位: 米，姿态为四元数）
+  # 默认值表示原点处朝向正前方
   custom_init_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
-  relocalization_map_abs_path: "" # must be set for Relocalization mode or will fail
 
-  # To get the mapping result file, please use the set_param.sh script provided: "./set_param.sh save_map 1"
-  mapping_result_dest_dir: "" # "": if not specified, save to default location of {ws}/src/odin_ros_driver/map/{driver_start_time}/
-  mapping_result_file_name: "" # "": if not specified, save to location above with default file name of map_{map_save_time}.bin
+  # ===== 重定位地图文件路径 =====
+  # 重定位模式（custom_map_mode: 2）必须设置此参数
+  # 需要提供 .bin 格式地图文件的绝对路径
+  # 示例: "/home/user/maps/my_map.bin"
+  # 留空时重定位模式将无法启动
+  relocalization_map_abs_path: ""
+
+  # ===== SLAM 地图保存目录 =====
+  # SLAM 模式下保存地图文件的目标目录
+  # 留空时使用默认路径: {工作空间}/src/odin_ros_driver/map/{驱动启动时间}/
+  # 示例: "/home/user/maps/"
+  mapping_result_dest_dir: ""
+
+  # ===== SLAM 地图保存文件名 =====
+  # 保存的地图文件名（不含路径）
+  # 留空时使用默认文件名: map_{地图保存时间}.bin
+  # 示例: "my_room.bin"
+  mapping_result_file_name: ""

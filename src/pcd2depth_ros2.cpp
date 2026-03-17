@@ -20,11 +20,13 @@ limitations under the License.
 #include <string>
 #include "depth_image_ros2_node.hpp"
 #include <rcpputils/filesystem_helper.hpp>
+// 检查指定路径的文件是否存在
 bool fileExists(const std::string& filename) {
     struct stat buffer;
     return (stat(filename.c_str(), &buffer) == 0);
 }
 
+// 从 calib.yaml 文件加载相机标定参数，并注册到指定 ROS2 节点的参数服务器
 bool loadCalibParameters(std::shared_ptr<rclcpp::Node> node, const std::string& calib_file_path) {
     try {
         RCLCPP_INFO(node->get_logger(), "Loading parameters from calib.yaml file: %s", calib_file_path.c_str());
@@ -118,6 +120,7 @@ bool loadCalibParameters(std::shared_ptr<rclcpp::Node> node, const std::string& 
         return false;
     }
 }
+// 通过当前源文件路径向上遍历目录树，定位包含 package.xml 的功能包根目录
 std::string get_package_source_directory() {
     // 使用 rcpputils::fs::path 替代 std::filesystem::path
     rcpputils::fs::path current_file(__FILE__);
@@ -136,6 +139,7 @@ std::string get_package_source_directory() {
     
     return path.string();
 }
+// 主函数：读取配置确认是否启用深度图，等待 calib.yaml 生成后加载标定参数并启动深度图节点
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);

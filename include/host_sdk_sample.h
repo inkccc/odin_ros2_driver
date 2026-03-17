@@ -160,6 +160,7 @@ double get_ptp_smoothed_offset();
 #define PAI 3.14159265358979323846
 #define DTOF_NUM_ROW_PER_GROUP 6
 // Common functions
+// 将纳秒时间戳转换为ROS时间类型（兼容ROS1和ROS2）
 inline ros::Time ns_to_ros_time(uint64_t timestamp_ns) {
     ros::Time t;
     #ifdef ROS2
@@ -172,6 +173,7 @@ inline ros::Time ns_to_ros_time(uint64_t timestamp_ns) {
     return t;
 }
 
+// 将ROS时间类型转换为纳秒时间戳（兼容ROS1和ROS2）
 inline uint64_t ros_time_to_ns(const ros::Time &t) {
     #ifdef ROS2
         return static_cast<uint64_t>(t.sec) * 1000000000ULL + t.nanosec;
@@ -180,6 +182,7 @@ inline uint64_t ros_time_to_ns(const ros::Time &t) {
     #endif
 }
 
+// 根据配置生成对齐的ROS时间戳（支持传感器时间、主机时间及PTP校正时间三种模式）
 inline ros::Time make_aligned_stamp(uint64_t sensor_timestamp_ns
 #ifdef ROS2
                                     , const rclcpp::Node::SharedPtr& node
@@ -205,6 +208,7 @@ inline ros::Time make_aligned_stamp(uint64_t sensor_timestamp_ns
     return ns_to_ros_time(ts_ns);
 }
 
+// ROS节点控制接口抽象基类，定义DTOF帧率、里程计TF及点云阈值等参数的访问接口
 class RosNodeControlInterface {
     public:
         virtual ~RosNodeControlInterface() = default;
@@ -218,16 +222,18 @@ class RosNodeControlInterface {
     
 RosNodeControlInterface* getRosNodeControl();
 
-// Multi-sensor publisher class
+// 多传感器数据发布类，封装IMU、RGB相机、点云、里程计等所有传感器数据的ROS消息发布逻辑
 class MultiSensorPublisher {
 public:
     #ifdef ROS2
+        // 构造函数（ROS2），接收节点指针并初始化所有话题发布者
         MultiSensorPublisher(rclcpp::Node::SharedPtr node)
             : node_(node),cameraposevisual_ {1.0f, 0.0f, 0.0f, 1.0f} {
             initialize_publishers();
             // initialize_data_logger();
         }
     #else
+        // 构造函数（ROS1），接收NodeHandle引用并初始化所有话题发布者
         MultiSensorPublisher(ros::NodeHandle& nh)
             : cameraposevisual_(1.0f, 0.0f, 0.0f, 1.0f) {
             initialize_publishers(nh);
@@ -235,33 +241,40 @@ public:
         }
     #endif
     
+    // 获取数据记录根目录路径
     std::filesystem::path get_root_dir() const { return root_dir_; }
 
+    // 设置全局日志级别
     void set_log_level(int level) {
         g_log_level = level;
     }
-    // Optional external logger setter
+    // 设置外部二进制数据记录器实例
     void set_data_logger(std::shared_ptr<BinaryDataLogger> logger) {
         data_logger_ = std::move(logger);
     }
 
+    // 获取已记录的位姿帧数量索引
     int get_pose_index() {
         return pose_index_.load();
     }
 
+    // 获取已记录的点云帧数量索引
     int get_cloud_index() {
         return cloud_index_.load();
     }
 
+    // 获取已记录的图像帧数量索引
     int get_image_index() {
         return image_index_.load();
     }
 
+    // 获取已记录的旋转帧数量索引
     int get_wcwi_index() {
         return wcwi_index_.load();
     }
  
     rawCloudRender render_;
+    // 将IMU数据发布为ROS sensor_msgs/Imu消息，并可选记录到二进制日志
     void publishImu(imu_convert_data_t *stream) {
         #ifdef ROS2
             sensor_msgs::msg::Imu imu_msg;
@@ -331,6 +344,7 @@ public:
     using ImageConstPtr = sensor_msgs::ImageConstPtr;
     using PointCloud2ConstPtr = sensor_msgs::PointCloud2ConstPtr;
 #endif
+// 尝试从RGB图像队列和点云队列中匹配时间戳相近的数据对并进行彩色点云渲染处理
 void try_process_pair() {
     // Record queue status
     size_t rgb_size, pcd_size;
@@ -401,9 +415,10 @@ void try_process_pair() {
         process_pair(rgb_msg, pcd_msg);
     }
 }
-bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image, 
-                               capture_Image_List_t* cloud_stream, 
-                               int pcd_idx) 
+// 校验彩色点云渲染所需的RGB图像、点云流指针及索引等参数的合法性
+bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image,
+                               capture_Image_List_t* cloud_stream,
+                               int pcd_idx)
 {
     // 1. Check RGB image validity
     if (rgb_image.empty()) {
@@ -461,6 +476,7 @@ bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image,
     return true;
 }
 
+// 处理一对时间对齐的RGB图像和点云数据，渲染后发布彩色点云消息
 void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_msg)
 {
     auto start_time = std::chrono::steady_clock::now();
@@ -564,6 +580,7 @@ void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_m
     } 
 }
 
+// 将DTOF原始点云（含强度和置信度字段）发布为PointCloud2消息
 void publishIntensityCloud(capture_Image_List_t* stream, int idx)
 {
     // Check index validity
@@ -721,6 +738,7 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
     #endif
 }
 
+// 将DTOF灰度强度图像发布为mono8格式的ROS Image消息
 void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
     ImageMsg msg;
     #ifdef ROS2
@@ -752,6 +770,7 @@ void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
     #endif
 }
 
+// 解码JPEG格式的RGB图像并发布原始图、去畸变图和压缩图消息，可选记录到日志
 void publishRgb(capture_Image_List_t *stream) {
     buffer_List_t &image = stream->imageList[0];
 
@@ -856,7 +875,8 @@ void publishRgb(capture_Image_List_t *stream) {
 }
 
 
-    void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx) 
+    // 将SLAM彩色点云（XYZRGBA格式）发布为PointCloud2消息，可选记录到日志
+    void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx)
     {
         #ifdef ROS2
                 sensor_msgs::msg::PointCloud2 msg;
@@ -989,7 +1009,8 @@ void publishRgb(capture_Image_List_t *stream) {
 #endif
     }
 
-    void recordrotate(capture_Image_List_t* stream) { 
+    // 记录旋转数据并将相机-雷达外参及IMU-雷达外参写入YAML标定文件
+    void recordrotate(capture_Image_List_t* stream) {
         if(data_logger_) {
             uint32_t data_len = stream->imageList[0].length;
             if (data_len == sizeof(ros_odom_convert_complete_t)) {
@@ -1097,6 +1118,7 @@ void publishRgb(capture_Image_List_t *stream) {
     }
 
 
+    // 将SLAM里程计数据发布为Odometry消息，支持路径可视化、相机位姿可视化及TF广播
     void publishOdometry(capture_Image_List_t* stream, OdometryType odom_type, bool show_path, bool show_camerapose) {
         
 #ifdef ROS2
@@ -1384,6 +1406,7 @@ void publishRgb(capture_Image_List_t *stream) {
 #endif
     }
 
+    // 初始化二进制数据记录器，设置存储目录及批量写入参数
     void initialize_data_logger(std::string data_dir = "") {
 
         try {
@@ -1404,6 +1427,7 @@ void publishRgb(capture_Image_List_t *stream) {
         }
     }
 
+    // 从YAML文件加载相机内参和畸变系数，并构建多项式相机模型
     int loadCameraParams(const std::string& yaml_file) {
         try {
             YAML::Node config = YAML::LoadFile(yaml_file);
@@ -1475,6 +1499,7 @@ void publishRgb(capture_Image_List_t *stream) {
         }
     }
 
+    // 根据相机内参和畸变模型预计算去畸变重映射表，用于图像矫正
     void buildUndistortMap()
     {
         m_undistort_map_x.create(m_camera_params.height, m_camera_params.width, CV_32F);
@@ -1518,15 +1543,18 @@ private:
     std::filesystem::path root_dir_;
 
     // Updated helper functions
+    // 获取RGB图像队列中最新的一帧图像消息
     ImageConstPtr getLatestRgbImage() {
         std::lock_guard<std::mutex> lock(rgb_queue_mutex_);
         return (!rgb_image_queue_.empty()) ? rgb_image_queue_.back() : nullptr;
     }
 
+    // 获取点云队列中最新的一帧点云消息
     PointCloud2ConstPtr getLatestIntensityCloud() {
         std::lock_guard<std::mutex> lock(pcd_queue_mutex_);
         return (!pcd_queue_.empty()) ? pcd_queue_.back() : nullptr;
     }
+    // 获取当前RGB图像队列的快照，返回所有帧的cv::Mat副本列表
     std::vector<cv::Mat> getRgbImageQueueSnapshot() {
         std::lock_guard<std::mutex> lock(rgb_queue_mutex_);
         std::vector<cv::Mat> images;
@@ -1559,17 +1587,19 @@ private:
         0.0, 0.0, 0.0, 1.0).finished();
     Eigen::Matrix4d T_cl_ = Eigen::Matrix4d::Identity(); // Camera->Lidar from YAML
 #ifdef ROS2
+    // 获取当前点云队列的快照，返回所有缓存点云消息的副本列表（ROS2版本）
     std::vector<sensor_msgs::msg::PointCloud2> getIntensityCloudQueueSnapshot() {
         std::lock_guard<std::mutex> lock(pcd_queue_mutex_);
         std::vector<sensor_msgs::msg::PointCloud2> clouds;
-        
+
         for (const auto& msg_ptr : pcd_queue_) {
             clouds.push_back(*msg_ptr);
         }
-        
+
         return clouds;
     }
 #else
+    // 获取当前点云队列的快照，返回所有缓存点云消息的副本列表（ROS1版本）
     std::vector<sensor_msgs::PointCloud2> getIntensityCloudQueueSnapshot() {
         std::lock_guard<std::mutex> lock(pcd_queue_mutex_);
         std::vector<sensor_msgs::PointCloud2> clouds;
@@ -1582,6 +1612,7 @@ private:
     }
 #endif
 
+    // 初始化所有ROS2话题发布者，配置QoS策略（ROS2专用）
     void initialize_publishers() {
         #ifdef ROS2
             // Small data with queue depth 1
@@ -1610,6 +1641,7 @@ private:
         #endif
     }
     #ifdef ROS1
+        // 初始化所有ROS1话题发布者（ROS1专用）
         void initialize_publishers(ros::NodeHandle& nh) {
             imu_pub_ = nh.advertise<ros::Imu>("odin1/imu", 4000);
             rgb_pub_ = nh.advertise<ros::Image>("odin1/image", 100);
@@ -1665,16 +1697,18 @@ private:
     #endif
 };
 
+// 命令行控制类，提供键值对参数注册、设置、获取及变更回调通知功能
 class CommandLineControl {
 public:
     using Callback = std::function<void(const std::string&, int)>;
 
-
+    // 注册一个可控参数键及其默认值
     void register_key(const std::string& key, int default_value = 0) {
         std::lock_guard<std::mutex> lock(mtx);
         kv_map[key] = default_value;
     }
 
+    // 设置参数键的值，若值发生变化则触发已注册的回调函数
     void set(const std::string& key, int value) {
         Callback cb_to_invoke = nullptr;
         {
@@ -1695,6 +1729,7 @@ public:
         }
     }
 
+    // 获取指定参数键的当前值，键不存在时返回-1
     int get(const std::string& key) const {
         std::lock_guard<std::mutex> lock(mtx);
         auto it = kv_map.find(key);
@@ -1702,6 +1737,7 @@ public:
     }
 
 
+    // 注册参数变更时触发的回调函数
     void register_callback(Callback cb) {
         std::lock_guard<std::mutex> lock(mtx);
         callback = cb;
