@@ -46,6 +46,8 @@ namespace GlobalCameraParams {
     Eigen::Matrix4f g_T_camera_lidar = Eigen::Matrix4f::Identity();
 }
 bool raw_debug=0;
+
+// 从 calib.yaml 标定文件加载相机内参（畸变系数、焦距、主点）和外参（相机-激光雷达变换矩阵）
 bool rawCloudRender::init(const std::string& yamlFilePath) {
     YAML::Node config;
     try {
@@ -123,7 +125,9 @@ bool rawCloudRender::init(const std::string& yamlFilePath) {
     
     return true;
 }
-void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image, 
+// 将原始 DTOF 点云通过相机外参投影到 RGB 图像，生成彩色点云（XYZRGB 格式）
+// rgb_image: 输入 RGB 图像数据; pcd_stream: 点云数据流; pcdIdx: 帧索引; rgbCloud_flat: 输出彩色点云
+void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
                            capture_Image_List_t* pcd_stream, 
                            int pcdIdx, 
                            std::vector<float>& rgbCloud_flat) 
@@ -272,6 +276,7 @@ void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
 			  << (100.0 * valid_count / total_points) << "%)" << std::endl;
          }
 }
+// 打印当前已加载的相机标定参数，用于调试验证
 void rawCloudRender::print_camera_calib() {
     std::cout << model_type_ << std::endl;
     std::cout << image_width_ << std::endl;

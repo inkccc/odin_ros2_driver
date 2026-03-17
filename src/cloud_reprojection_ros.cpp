@@ -26,8 +26,7 @@ limitations under the License.
     #include <boost/bind.hpp>
 #endif
 
-// Fixed Til (T_imu_lidar): lidar position in imu frame, transforms from lidar to imu
-// TODO: Fill in the actual Til values for your sensor setup
+// 返回固定的激光雷达到 IMU 的变换矩阵（T_imu_lidar），包含固定平移偏移量
 static Eigen::Matrix4d getFixedTil()
 {
     Eigen::Matrix4d Til = Eigen::Matrix4d::Identity();
@@ -37,13 +36,14 @@ static Eigen::Matrix4d getFixedTil()
     return Til;
 }
 
+// 检查指定路径的文件是否存在
 static bool fileExists(const std::string& filename) {
     struct stat buffer;
     return (stat(filename.c_str(), &buffer) == 0);
 }
 
 #ifdef ROS2
-// Helper function to get package source directory for ROS2
+// 通过当前源文件路径推导功能包根目录，用于定位 config/calib.yaml
 static std::string get_package_source_directory() {
     std::string current_file = __FILE__;
     size_t pos = current_file.find("/src/cloud_reprojection_ros.cpp");
@@ -55,6 +55,7 @@ static std::string get_package_source_directory() {
 
 // ==================== ROS2 Implementation ====================
 
+// 构造函数：加载参数并初始化点云/里程计订阅器、图像发布器和重投影处理器
 CloudReprojectionRosNode::CloudReprojectionRosNode(const rclcpp::NodeOptions& options)
     : Node("cloud_reprojection_node", options)
 {
@@ -77,6 +78,7 @@ CloudReprojectionRosNode::CloudReprojectionRosNode(const rclcpp::NodeOptions& op
     RCLCPP_INFO(this->get_logger(), "CloudReprojectionRosNode initialized successfully");
 }
 
+// 从 ROS2 参数和 calib.yaml 加载话题名称、相机内参及外参，并初始化 CloudReprojector
 void CloudReprojectionRosNode::loadParameters()
 {
     // Declare and get parameters
@@ -165,6 +167,7 @@ void CloudReprojectionRosNode::loadParameters()
     }
 }
 
+// 时间同步回调：接收 SLAM 点云和里程计，执行点云重投影并发布可视化图像
 void CloudReprojectionRosNode::syncCallback(
     const PointCloud2::ConstSharedPtr& cloud_msg,
     const Odometry::ConstSharedPtr& odom_msg)

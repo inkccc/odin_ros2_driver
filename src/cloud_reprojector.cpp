@@ -14,10 +14,12 @@ limitations under the License.
 #include "cloud_reprojector.hpp"
 #include <cmath>
 
+// 默认构造函数
 CloudReprojector::CloudReprojector()
 {
 }
 
+// 初始化重投影器：设置相机内参和外参，并创建多项式鱼眼相机模型
 bool CloudReprojector::initialize(const CameraParams& cam_params, const ExtrinsicParams& ext_params)
 {
     camera_params_ = cam_params;
@@ -42,6 +44,7 @@ bool CloudReprojector::initialize(const CameraParams& cam_params, const Extrinsi
     return true;
 }
 
+// 根据相机-激光雷达外参 Tcl 和激光雷达-IMU 外参 Til 计算相机-IMU 变换矩阵 Tic
 Eigen::Matrix4d CloudReprojector::calculateTic(const Eigen::Matrix4d& Tcl, const Eigen::Matrix4d& Til)
 {
     // Tic = Til * Tlc = Til * Tcl.inverse()
@@ -49,6 +52,7 @@ Eigen::Matrix4d CloudReprojector::calculateTic(const Eigen::Matrix4d& Tcl, const
     return Til * Tlc;
 }
 
+// 将里程计位姿（位置+四元数）转换为 4×4 变换矩阵
 Eigen::Matrix4d CloudReprojector::odomPoseToMatrix(const OdomPose& odom) const
 {
     Eigen::Matrix4d T = Eigen::Matrix4d::Identity();
@@ -59,6 +63,7 @@ Eigen::Matrix4d CloudReprojector::odomPoseToMatrix(const OdomPose& odom) const
     return T;
 }
 
+// 将里程计坐标系下的 SLAM 彩色点云通过当前位姿重投影到相机图像平面
 cv::Mat CloudReprojector::reprojectCloud(const pcl::PointCloud<pcl::PointXYZRGB>& cloud_odom,
                                           const OdomPose& odom_pose)
 {
@@ -85,6 +90,7 @@ cv::Mat CloudReprojector::reprojectCloud(const pcl::PointCloud<pcl::PointXYZRGB>
     return projectCloudToImage(cloud_in_cam);
 }
 
+// 将相机坐标系下的彩色点云通过多项式相机模型投影到图像平面，生成可视化 BGR 图像
 cv::Mat CloudReprojector::projectCloudToImage(const pcl::PointCloud<pcl::PointXYZRGB>& cloud_in_cam) const
 {
     cv::Mat img = cv::Mat::zeros(camera_params_.image_height, camera_params_.image_width, CV_8UC3);

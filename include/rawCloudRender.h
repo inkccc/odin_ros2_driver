@@ -33,18 +33,25 @@ namespace GlobalCameraParams {
     extern Eigen::Matrix4f g_T_camera_lidar;
 }
 
+// 原始点云彩色渲染器：将 DTOF 点云通过相机外参投影到 RGB 图像，生成彩色点云
 class rawCloudRender {
 public:
-  
 
+    // 从 calib.yaml 加载相机内参（畸变系数、焦距等）和外参（相机-激光雷达变换矩阵）
     bool init(const std::string& yamlFilePath);
-    
+
+    // 将设备 NV12 格式图像缓冲区转换为 RGB 浮点二维数组
     void nv12buffer_2_rgb(buffer_List_t &image, std::vector<std::vector<float>>& rgb_image);
+
+    // 将点云通过相机投影模型映射到图像，生成彩色点云（XYZRGB 展平格式）
     void render(std::vector<std::vector<float>>& rgb_image, capture_Image_List_t* pcdStream, int pcdIdx, std::vector<float>& rgbCloud_flat);
-    
+
+    // 打印当前相机标定参数（用于调试）
     void print_camera_calib();
-    
+
+    // 获取图像宽度（像素）
     int getImageWidth() const { return image_width_; }
+    // 获取图像高度（像素）
     int getImageHeight() const { return image_height_; }
     
    

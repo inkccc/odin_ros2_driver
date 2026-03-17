@@ -14,6 +14,7 @@ limitations under the License.
 #include "depth_image_ros2_node.hpp"
 #include <functional>
 
+// 构造函数：初始化深度图节点，加载相机参数并创建点云转深度图转换器
 DepthImageRos2Node::DepthImageRos2Node(const rclcpp::NodeOptions & options)
     : Node("depth_image_ros2_node", options)
 {
@@ -35,6 +36,7 @@ DepthImageRos2Node::DepthImageRos2Node(const rclcpp::NodeOptions & options)
                        << "\n  depth_cloud_topic: " << depth_cloud_topic_);
 }
 
+// 订阅点云和图像话题，创建时间同步器，初始化深度图和点云发布器
 void DepthImageRos2Node::initialize()
 {
     cloud_sub_.subscribe(this, cloud_raw_topic_);
@@ -52,6 +54,7 @@ void DepthImageRos2Node::initialize()
     RCLCPP_INFO(this->get_logger(), "DepthImageRos2Node initialized successfully");
 }
 
+// 从 ROS2 参数服务器加载相机内参、畸变系数和相机-激光雷达外参矩阵
 PointCloudToDepthConverter::CameraParams DepthImageRos2Node::loadCameraParams()
 {
     PointCloudToDepthConverter::CameraParams params;
@@ -109,6 +112,7 @@ PointCloudToDepthConverter::CameraParams DepthImageRos2Node::loadCameraParams()
     return params;
 }
 
+// 时间同步回调：接收点云和 RGB 图像，调用深度图转换器生成并发布深度图和彩色点云
 void DepthImageRos2Node::syncCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr cloud_msg,
                                      // const sensor_msgs::msg::CompressedImage::ConstSharedPtr image_msg,
                                      const sensor_msgs::msg::Image::ConstSharedPtr color_msg)
@@ -151,6 +155,7 @@ void DepthImageRos2Node::syncCallback(const sensor_msgs::msg::PointCloud2::Const
     publishDepthCloud(result.colored_cloud, cloud_msg->header);
 }
 
+// 将 OpenCV 深度图像转换为 ROS2 Image 消息并发布
 void DepthImageRos2Node::publishDepthImage(const cv::Mat &img,
                                           const std_msgs::msg::Header &header,
                                           const std::string &encoding)
@@ -159,6 +164,7 @@ void DepthImageRos2Node::publishDepthImage(const cv::Mat &img,
     depth_image_pub_.publish(*depth_msg);
 }
 
+// 将带颜色的 PCL 点云转换为 ROS2 PointCloud2 消息并发布
 void DepthImageRos2Node::publishDepthCloud(const pcl::PointCloud<pcl::PointXYZRGB> &colored_cloud,
                                           const std_msgs::msg::Header &header)
 {
