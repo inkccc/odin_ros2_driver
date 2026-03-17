@@ -761,12 +761,11 @@ void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
 
     msg.data.resize(image_size);
 
-    // 左右+上下翻转（等价于180°旋转）：将像素数组倒序拷贝
-    const uint8_t* src = static_cast<const uint8_t*>(stream->imageList[idx].pAddr);
-    uint8_t* dst = msg.data.data();
-    for (size_t i = 0; i < image_size; ++i) {
-        dst[i] = src[image_size - 1 - i];
-    }
+    // 仅水平翻转（左右镜像）：使用 OpenCV SIMD 优化的 flip，避免额外拷贝
+    const uint8_t* src_ptr = static_cast<const uint8_t*>(stream->imageList[idx].pAddr);
+    cv::Mat src_mat(height, width, CV_8UC1, const_cast<uint8_t*>(src_ptr));
+    cv::Mat dst_mat(height, width, CV_8UC1, msg.data.data());
+    cv::flip(src_mat, dst_mat, 1);  // 1 = 水平翻转
 
     #ifdef ROS2
         intensity_gray_pub_->publish(msg);

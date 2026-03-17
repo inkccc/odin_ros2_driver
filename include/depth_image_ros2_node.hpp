@@ -24,8 +24,6 @@ limitations under the License.
 
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
-#include <image_transport/image_transport.hpp>
-
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -65,8 +63,7 @@ private:
     typedef message_filters::Synchronizer<MySyncPolicy> Sync;
     std::shared_ptr<Sync> sync_;
 
-    std::shared_ptr<image_transport::ImageTransport> it_;
-    image_transport::Publisher depth_image_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_image_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr depth_cloud_pub_;
 
     std::unique_ptr<PointCloudToDepthConverter> depth_converter_;
