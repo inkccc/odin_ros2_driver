@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(odin_ros_driver)
+project(odin_ros2_driver)
 
 # ===== 平台架构检测 =====
 # 自动检测当前主机架构（x86_64 或 ARM），用于选择对应的预编译 SDK 库
@@ -247,10 +247,6 @@ install(DIRECTORY config/
     DESTINATION share/${PROJECT_NAME}/config
 )
 
-# 安装 rviz 配置文件
-install(DIRECTORY rviz/
-    DESTINATION share/${PROJECT_NAME}/rviz
-)
 
 ament_export_targets(export_${PROJECT_NAME})
 

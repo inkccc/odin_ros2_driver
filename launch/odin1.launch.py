@@ -1,13 +1,13 @@
 # Copyright 2025 Manifold Tech Ltd.
 # Licensed under the Apache License, Version 2.0
 #
-# 使用方式: ros2 launch odin_ros_driver odin1.launch.py
+# 使用方式: ros2 launch odin_ros2_driver odin1.launch.py
 #
 # 本 launch 文件启动 Odin1 传感器驱动所需的全部节点：
 #   1. host_sdk_sample              - 主驱动节点，负责设备通信及数据发布
 #   2. pcd2depth_ros2_node          - 点云转深度图节点（需在 control_command.yaml 中启用 senddepth: 1）
 #   3. cloud_reprojection_ros2_node - 点云重投影节点（需在 control_command.yaml 中启用 sendreprojection: 1）
-#   4. rviz2                        - 可视化工具，加载预设 rviz/odin_ros2.rviz 配置
+#   4. rviz2                        - 可视化工具，加载预设 config/rviz/odin_ros2.rviz 配置
 
 import os
 import yaml
@@ -21,11 +21,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     # ===== 获取功能包的安装共享目录 =====
     # 用于构建配置文件和 rviz 文件的绝对路径
-    package_dir = get_package_share_directory('odin_ros_driver')
+    package_dir = get_package_share_directory('odin_ros2_driver')
 
     # ===== 声明 launch 参数：驱动配置文件路径 =====
     # 默认指向 config/control_command.yaml，可在 launch 时通过命令行覆盖：
-    #   ros2 launch odin_ros_driver odin1.launch.py config_file:=/path/to/your/config.yaml
+    #   ros2 launch odin_ros2_driver odin1.launch.py config_file:=/path/to/your/config.yaml
     config_file_arg = DeclareLaunchArgument(
         'config_file',
         default_value=os.path.join(package_dir, 'config', 'control_command.yaml'),
@@ -33,11 +33,11 @@ def generate_launch_description():
     )
 
     # ===== 声明 launch 参数：RViz2 配置文件路径 =====
-    # 默认使用 rviz/odin_ros2.rviz，可在 launch 时通过命令行覆盖：
-    #   ros2 launch odin_ros_driver odin1.launch.py rviz_config:=/path/to/your.rviz
+    # 默认使用 config/rviz/odin_ros2.rviz，可在 launch 时通过命令行覆盖：
+    #   ros2 launch odin_ros2_driver odin1.launch.py rviz_config:=/path/to/your.rviz
     rviz_config_arg = DeclareLaunchArgument(
         'rviz_config',
-        default_value=os.path.join(package_dir, 'rviz', 'odin_ros2.rviz'),
+        default_value=os.path.join(package_dir, 'config', 'rviz', 'odin_ros2.rviz'),
         description='RViz2 可视化配置文件路径（.rviz 格式）'
     )
 
@@ -52,7 +52,7 @@ def generate_launch_description():
     #   - /odin1/odometry         里程计数据
     #   - tf                      坐标变换（odom → base_link）
     host_sdk_node = Node(
-        package='odin_ros_driver',
+        package='odin_ros2_driver',
         executable='host_sdk_sample',
         name='host_sdk_sample',
         output='screen',
@@ -77,7 +77,7 @@ def generate_launch_description():
     pcd2depth_calib_path = os.path.join(package_dir, 'config', 'calib.yaml')
     pcd2depth_params['calib_file_path'] = pcd2depth_calib_path
     pcd2depth_node = Node(
-        package='odin_ros_driver',
+        package='odin_ros2_driver',
         executable='pcd2depth_ros2_node',
         name='pcd2depth_ros2_node',
         output='screen',
@@ -96,7 +96,7 @@ def generate_launch_description():
     reprojection_calib_path = os.path.join(package_dir, 'config', 'calib.yaml')
     reprojection_params['calib_file_path'] = reprojection_calib_path
     cloud_reprojection_node = Node(
-        package='odin_ros_driver',
+        package='odin_ros2_driver',
         executable='cloud_reprojection_ros2_node',
         name='cloud_reprojection_ros2_node',
         output='screen',
@@ -105,7 +105,7 @@ def generate_launch_description():
 
     # ===== RViz2 可视化节点 =====
     # 功能：加载预设 rviz 配置，可视化点云、图像、TF 等数据
-    # 配置文件位于：rviz/odin_ros2.rviz
+    # 配置文件位于：config/rviz/odin_ros2.rviz
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',

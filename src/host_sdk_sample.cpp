@@ -83,7 +83,7 @@ static capture_Image_List_t g_latest_rgb;
 static bool g_renderer_initialized = false;
 static std::shared_ptr<rawCloudRender> g_renderer = nullptr;
 std::string calib_file_ = "";
-static std::shared_ptr<odin_ros_driver::YamlParser> g_parser = nullptr;
+static std::shared_ptr<odin_ros2_driver::YamlParser> g_parser = nullptr;
 
 static constexpr size_t PTP_SMOOTH_WINDOW_SIZE = 30;
 static std::mutex g_ptp_mutex;
@@ -1108,7 +1108,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             #endif
             return;
         }
-	const std::string package_name = "odin_ros_driver";
+	const std::string package_name = "odin_ros2_driver";
 	std::string config_dir = "";
 	#ifdef ROS2
 	    char* ros_workspace = std::getenv("COLCON_PREFIX_PATH");
@@ -1116,7 +1116,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
 		std::string workspace_path(ros_workspace);
 		size_t pos = workspace_path.find("/install");
 		if (pos != std::string::npos) {
-		    config_dir = workspace_path.substr(0, pos) + "/src/odin_ros_driver/config";
+		    config_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/config";
 		} else {
 		    config_dir = ament_index_cpp::get_package_share_directory(package_name) + "/config";
 		}
@@ -1629,7 +1629,7 @@ int main(int argc, char *argv[])
         std::string package_path = get_package_source_directory();
         std::cout << "package_path: " << package_path << std::endl;
     #else
-    	std::string package_path = get_package_share_path("odin_ros_driver");
+    	std::string package_path = get_package_share_path("odin_ros2_driver");
     #endif
         std::string config_dir = package_path + "/config";
         std::string config_file = config_dir + "/control_command.yaml";
@@ -1643,7 +1643,7 @@ int main(int argc, char *argv[])
             ROS_INFO("Command file path set to: %s", g_command_file_path.c_str());
         #endif
 
-        g_parser = std::make_shared<odin_ros_driver::YamlParser>(config_file);
+        g_parser = std::make_shared<odin_ros2_driver::YamlParser>(config_file);
         if (!g_parser->loadConfig()) {
             #ifdef ROS2
                 RCLCPP_ERROR(node->get_logger(), "Failed to load config file: %s", config_file.c_str());
@@ -1702,7 +1702,7 @@ int main(int argc, char *argv[])
 
         lidar_log_set_level(LIDAR_LOG_INFO);
 
-        const std::string package_name = "odin_ros_driver";
+        const std::string package_name = "odin_ros2_driver";
         std::string data_dir = "";
         std::string log_dir = "";
         std::string map_dir = "";
@@ -1712,9 +1712,9 @@ int main(int argc, char *argv[])
                 std::string workspace_path(ros_workspace);
                 size_t pos = workspace_path.find("/install");
                 if (pos != std::string::npos) {
-                    data_dir = workspace_path.substr(0, pos) + "/src/odin_ros_driver/recorddata";
-                    log_dir = workspace_path.substr(0, pos) + "/src/odin_ros_driver/log";
-                    map_dir = workspace_path.substr(0, pos) + "/src/odin_ros_driver/map";
+                    data_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/recorddata";
+                    log_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/log";
+                    map_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/map";
                 } else {
                     data_dir = ament_index_cpp::get_package_share_directory(package_name) + "/recorddata";
                     log_dir = ament_index_cpp::get_package_share_directory(package_name) + "/log";
