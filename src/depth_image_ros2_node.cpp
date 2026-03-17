@@ -47,8 +47,7 @@ void DepthImageRos2Node::initialize()
     sync_->registerCallback(std::bind(&DepthImageRos2Node::syncCallback, this, 
                                      std::placeholders::_1, std::placeholders::_2));
 
-    it_ = std::make_shared<image_transport::ImageTransport>(shared_from_this());
-    depth_image_pub_ = it_->advertise(depth_image_topic_, 1);
+    depth_image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(depth_image_topic_, 1);
     depth_cloud_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(depth_cloud_topic_, 1);
 
     RCLCPP_INFO(this->get_logger(), "DepthImageRos2Node initialized successfully");
@@ -161,7 +160,7 @@ void DepthImageRos2Node::publishDepthImage(const cv::Mat &img,
                                           const std::string &encoding)
 {
     sensor_msgs::msg::Image::SharedPtr depth_msg = cv_bridge::CvImage(header, encoding, img).toImageMsg();
-    depth_image_pub_.publish(*depth_msg);
+    depth_image_pub_->publish(*depth_msg);
 }
 
 // 将带颜色的 PCL 点云转换为 ROS2 PointCloud2 消息并发布
