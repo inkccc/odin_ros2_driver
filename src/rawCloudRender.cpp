@@ -47,22 +47,8 @@ namespace GlobalCameraParams {
 }
 bool raw_debug=0;
 
-// 从 calib.yaml 标定文件加载相机内参（畸变系数、焦距、主点）和外参（相机-激光雷达变换矩阵）
-bool rawCloudRender::init(const std::string& yamlFilePath) {
-    YAML::Node config;
-    try {
-        config = YAML::LoadFile(yamlFilePath);
-    } catch (const YAML::BadFile& e) {
-        std::cerr << "Error: Could not open file '" << yamlFilePath << "' - " << e.what() << std::endl;
-        return false;
-    } catch (const YAML::ParserException& e) {
-        std::cerr << "Error: YAML parsing failed - " << e.what() << std::endl;
-        return false;
-    } catch (const std::exception& e) {
-        std::cerr << "Unexpected error: " << e.what() << std::endl;
-        return false;
-    }
-
+// [OPT-4] 从已解析的 YAML::Node 初始化，供外部传入预解析节点以避免重复 LoadFile
+bool rawCloudRender::init(const YAML::Node& config) {
     // Intrinsic parameters node (cam_0)
     const std::string cam_node_name = "cam_0";
     if (!config[cam_node_name]) {
@@ -90,16 +76,16 @@ bool rawCloudRender::init(const std::string& yamlFilePath) {
     GlobalCameraParams::g_k5 = cam_node["k5"].as<float>();
     GlobalCameraParams::g_k6 = cam_node["k6"].as<float>();
     GlobalCameraParams::g_k7 = cam_node["k7"].as<float>();
-    
+
     GlobalCameraParams::g_fx = cam_node["A11"].as<float>();
     GlobalCameraParams::g_skew = cam_node["A12"].as<float>();
     GlobalCameraParams::g_fy = cam_node["A22"].as<float>();
-    
+
     GlobalCameraParams::g_cx = cam_node["u0"].as<float>();
     GlobalCameraParams::g_cy = cam_node["v0"].as<float>();
 
     // === Read extrinsic transformation matrix ===
-    GlobalCameraParams::g_T_camera_lidar << 
+    GlobalCameraParams::g_T_camera_lidar <<
         tclNode[0].as<float>(), tclNode[1].as<float>(), tclNode[2].as<float>(), tclNode[3].as<float>(),
         tclNode[4].as<float>(), tclNode[5].as<float>(), tclNode[6].as<float>(), tclNode[7].as<float>(),
         tclNode[8].as<float>(), tclNode[9].as<float>(), tclNode[10].as<float>(), tclNode[11].as<float>(),
@@ -108,22 +94,41 @@ bool rawCloudRender::init(const std::string& yamlFilePath) {
     // === Display key parameters concisely ===
     std::cout << "=== Camera Calibration Parameters ===" << std::endl;
     std::cout << "Intrinsics:" << std::endl;
-    std::cout << "  fx: " << GlobalCameraParams::g_fx 
+    std::cout << "  fx: " << GlobalCameraParams::g_fx
               << ", fy: " << GlobalCameraParams::g_fy
-              << ", cx: " << GlobalCameraParams::g_cx 
+              << ", cx: " << GlobalCameraParams::g_cx
               << ", cy: " << GlobalCameraParams::g_cy << std::endl;
-    std::cout << "Distortion: k2=" << GlobalCameraParams::g_k2 
+    std::cout << "Distortion: k2=" << GlobalCameraParams::g_k2
               << ", k3=" << GlobalCameraParams::g_k3 << std::endl;
-    
+
     Eigen::Vector3f translation = GlobalCameraParams::g_T_camera_lidar.block<3,1>(0,3);
     Eigen::Matrix3f rotation = GlobalCameraParams::g_T_camera_lidar.block<3,3>(0,0);
     std::cout << "Extrinsics:" << std::endl;
-    std::cout << "  Translation: [" << translation.x() << ", " 
+    std::cout << "  Translation: [" << translation.x() << ", "
               << translation.y() << ", " << translation.z() << "]" << std::endl;
-    std::cout << "  Rotation (euler angles): " 
+    std::cout << "  Rotation (euler angles): "
               << rotation.eulerAngles(0,1,2).transpose() * 180/M_PI << "°" << std::endl;
-    
+
     return true;
+}
+
+// 从 calib.yaml 标定文件加载相机内参（畸变系数、焦距、主点）和外参（相机-激光雷达变换矩阵）
+// [OPT-4] 如果已有解析好的 YAML::Node，请直接调用 init(const YAML::Node&) 避免重复 LoadFile
+bool rawCloudRender::init(const std::string& yamlFilePath) {
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(yamlFilePath);
+    } catch (const YAML::BadFile& e) {
+        std::cerr << "Error: Could not open file '" << yamlFilePath << "' - " << e.what() << std::endl;
+        return false;
+    } catch (const YAML::ParserException& e) {
+        std::cerr << "Error: YAML parsing failed - " << e.what() << std::endl;
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "Unexpected error: " << e.what() << std::endl;
+        return false;
+    }
+    return init(config);
 }
 // 将原始 DTOF 点云通过相机外参投影到 RGB 图像，生成彩色点云（XYZRGB 格式）
 // rgb_image: 输入 RGB 图像数据; pcd_stream: 点云数据流; pcdIdx: 帧索引; rgbCloud_flat: 输出彩色点云
