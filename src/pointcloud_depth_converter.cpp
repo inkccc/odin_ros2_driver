@@ -47,58 +47,43 @@ void PointCloudToDepthConverter::initializeInternalParams()
     K_4x4_.block<3, 3>(0, 0) = Kl_;
 
     Kcl_ = K_4x4_ * params_.Tcl;
+    Tlc_ = params_.Tcl.inverse();
 }
 
 // 预计算鱼眼相机的正向和逆向畸变映射表，用于图像去畸变和点云投影
+// 优化：合并正向/逆向两次遍历为单次遍历，使用 Horner 方法替代 pow() 计算多项式
 void PointCloudToDepthConverter::createDistortionMaps()
 {
     map_x_ = cv::Mat::zeros(params_.image_height, params_.image_width, CV_32FC1);
     map_y_ = cv::Mat::zeros(params_.image_height, params_.image_width, CV_32FC1);
-
-
-    for (int u = 0; u < params_.image_width; ++u)
-    {
-        for (int v = 0; v < params_.image_height; ++v)
-        {
-            double y = (v - params_.v0) / params_.A22;
-            double x = (u - params_.u0 - params_.A12 * y) / params_.A11;
-            
-            double r = sqrt(x * x + y * y);
-            double theta = atan(r);
-
-            double theta_d = theta + params_.k2 * pow(theta, 2) + params_.k3 * pow(theta, 3) +
-                                params_.k4 * pow(theta, 4) + params_.k5 * pow(theta, 5) +
-                                params_.k6 * pow(theta, 6) + params_.k7 * pow(theta, 7);
-
-            double x_distorted = x * (r / theta_d);
-            double y_distorted = y * (r / theta_d);
-
-            map_x_.at<float>(v, u) = static_cast<float>(x_distorted * params_.A11 + params_.A12 * y_distorted + params_.u0);
-            map_y_.at<float>(v, u) = static_cast<float>(y_distorted * params_.A22 + params_.v0);
-        }
-    }
-
     inv_map_x_ = cv::Mat::zeros(params_.image_height, params_.image_width, CV_32FC1);
     inv_map_y_ = cv::Mat::zeros(params_.image_height, params_.image_width, CV_32FC1);
+
     for (int u = 0; u < params_.image_width; ++u)
     {
         for (int v = 0; v < params_.image_height; ++v)
         {
             double y = (v - params_.v0) / params_.A22;
             double x = (u - params_.u0 - params_.A12 * y) / params_.A11;
-            
+
             double r = sqrt(x * x + y * y);
             double theta = atan(r);
 
-            double theta_d = theta + params_.k2 * pow(theta, 2) + params_.k3 * pow(theta, 3) +
-                                params_.k4 * pow(theta, 4) + params_.k5 * pow(theta, 5) +
-                                params_.k6 * pow(theta, 6) + params_.k7 * pow(theta, 7);
+            // Horner 方法计算 theta_d = theta + k2*theta^2 + ... + k7*theta^7
+            double theta_d = theta * (1.0 + theta * (params_.k2 + theta * (params_.k3 + theta * (params_.k4
+                           + theta * (params_.k5 + theta * (params_.k6 + theta * params_.k7))))));
 
-            double x_distorted = x * (theta_d / r);
-            double y_distorted = y * (theta_d / r);
+            // 正向映射: scaling = r / theta_d
+            double fwd_x = x * (r / theta_d);
+            double fwd_y = y * (r / theta_d);
+            map_x_.at<float>(v, u) = static_cast<float>(fwd_x * params_.A11 + params_.A12 * fwd_y + params_.u0);
+            map_y_.at<float>(v, u) = static_cast<float>(fwd_y * params_.A22 + params_.v0);
 
-            inv_map_x_.at<float>(v, u) = static_cast<float>(x_distorted * params_.A11 + params_.A12 * y_distorted + params_.u0);
-            inv_map_y_.at<float>(v, u) = static_cast<float>(y_distorted * params_.A22 + params_.v0);
+            // 逆向映射: scaling = theta_d / r
+            double inv_x = x * (theta_d / r);
+            double inv_y = y * (theta_d / r);
+            inv_map_x_.at<float>(v, u) = static_cast<float>(inv_x * params_.A11 + params_.A12 * inv_y + params_.u0);
+            inv_map_y_.at<float>(v, u) = static_cast<float>(inv_y * params_.A22 + params_.v0);
         }
     }
 }
@@ -198,21 +183,14 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
     }
     
     if (params_.image_width <= 0 || params_.image_height <= 0) {
-        std::cerr << "ERROR: Invalid target size: " 
+        std::cerr << "ERROR: Invalid target size: "
                   << params_.image_width << "x" << params_.image_height << std::endl;
         return cv::Mat();
     }
 
-    cv::Mat safe_input = depth_img.clone();
-    if (safe_input.empty()) {
-        std::cerr << "ERROR: Failed to create safe copy of input image!" << std::endl;
-        return cv::Mat();
-    }
-    
-
     cv::Mat depth_img_upsampled;
     try {
-        depth_img_upsampled = customResize(safe_input, cv::Size(1600, 1296));
+        depth_img_upsampled = customResize(depth_img, cv::Size(1600, 1296));
     } catch (const std::exception& e) {
         std::cerr << "ERROR: Custom resize failed: " << e.what() << std::endl;
         return cv::Mat();
@@ -275,24 +253,22 @@ cv::Mat PointCloudToDepthConverter::customResize(const cv::Mat& src, const cv::S
     
 
     cv::Mat dst(size.height, size.width, src.type());
-    
+
     float scale_x = src.cols / static_cast<float>(size.width);
     float scale_y = src.rows / static_cast<float>(size.height);
-    
+
     if (src.channels() != 1 || src.type() != CV_32F) {
         throw std::runtime_error("Unsupported image type - expected single channel float");
     }
-    
 
     for (int y = 0; y < dst.rows; y++) {
+        float* dst_row = dst.ptr<float>(y);
+        int src_y = std::min(static_cast<int>(y * scale_y), src.rows - 1);
+        const float* src_row = src.ptr<float>(src_y);
 
-        int src_y = static_cast<int>(y * scale_y);
-        src_y = std::min(src_y, src.rows - 1);
-        
         for (int x = 0; x < dst.cols; x++) {
-            int src_x = static_cast<int>(x * scale_x);
-            src_x = std::min(src_x, src.cols - 1);
-            dst.at<float>(y, x) = src.at<float>(src_y, src_x);
+            int src_x = std::min(static_cast<int>(x * scale_x), src.cols - 1);
+            dst_row[x] = src_row[src_x];
         }
     }
     
@@ -307,8 +283,9 @@ pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredClo
     cv::remap(color_img, color_undistorted, inv_map_x_, inv_map_y_, cv::INTER_LINEAR);
 
     pcl::PointCloud<pcl::PointXYZRGB> cloud_colored;
-
-    Eigen::Matrix4d Tlc = params_.Tcl.inverse();
+    cloud_colored.points.reserve(
+        static_cast<size_t>(depth_undistorted.rows / params_.point_sampling_rate)
+        * (depth_undistorted.cols / params_.point_sampling_rate));
 
     for (int v = 0; v < depth_undistorted.rows; v += params_.point_sampling_rate)
     {
@@ -324,7 +301,7 @@ pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredClo
 
                 Eigen::Vector4d point_cam(x_cam, y_cam, z_cam, 1.0);
 
-                Eigen::Vector4d point_lidar = Tlc * point_cam;
+                Eigen::Vector4d point_lidar = Tlc_ * point_cam;
 
                 pcl::PointXYZRGB point;
                 point.x = static_cast<float>(point_lidar[0]);
