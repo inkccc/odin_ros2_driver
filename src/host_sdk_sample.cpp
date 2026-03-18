@@ -522,57 +522,132 @@ static void process_command_file() {
     }
 }
 
-// 检测指定USB设备是否连接在USB 3.0或更高版本的接口上
+// [OPT-1] 通过 sysfs 检测指定USB设备是否连接在USB 3.0或更高版本的接口上
+// 原实现调用 popen("lsusb -v ...") 启动外部进程，耗时 500ms~2s；
+// 新实现直接读取 /sys/bus/usb/devices/<dev>/version，微秒级完成。
 bool isUsb3OrHigher(const std::string& vendorId, const std::string& productId) {
-    std::string command = "lsusb -d " + vendorId + ":" + productId + " -v | grep 'bcdUSB'";
-    
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
-    if (!pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    
-    if (result.empty()) {
+    namespace fs = std::filesystem;
+    const std::string sysfs_root = "/sys/bus/usb/devices";
+
+    auto t0 = std::chrono::steady_clock::now();
+
+    try {
+        for (const auto& entry : fs::directory_iterator(sysfs_root)) {
+            const std::string dev_name = entry.path().filename().string();
+            // 跳过接口节点（含 ':'，如 "1-1:1.0"）和点开头的隐藏节点
+            if (dev_name.find(':') != std::string::npos) continue;
+            if (dev_name.empty() || dev_name[0] == '.') continue;
+
+            const std::string dev_path = entry.path().string();
+
+            // 匹配 VID
+            std::ifstream vendor_f(dev_path + "/idVendor");
+            if (!vendor_f.is_open()) continue;
+            std::string vendor;
+            if (!std::getline(vendor_f, vendor)) continue;
+            vendor.erase(vendor.find_last_not_of(" \n\r\t") + 1);
+            if (vendor != vendorId) continue;
+
+            // 匹配 PID
+            std::ifstream product_f(dev_path + "/idProduct");
+            if (!product_f.is_open()) continue;
+            std::string product;
+            if (!std::getline(product_f, product)) continue;
+            product.erase(product.find_last_not_of(" \n\r\t") + 1);
+            if (product != productId) continue;
+
+            // 找到设备，读取 USB 版本
+            std::ifstream version_f(dev_path + "/version");
+            if (!version_f.is_open()) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+                        "[OPT-1] Found device %s:%s at %s but cannot open sysfs version file",
+                        vendorId.c_str(), productId.c_str(), dev_path.c_str());
+                #else
+                    ROS_ERROR("[OPT-1] Found device %s:%s at %s but cannot open sysfs version file",
+                        vendorId.c_str(), productId.c_str(), dev_path.c_str());
+                #endif
+                return false;
+            }
+            std::string ver_str;
+            if (!std::getline(version_f, ver_str)) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+                        "[OPT-1] Failed to read USB version from sysfs for device %s:%s",
+                        vendorId.c_str(), productId.c_str());
+                #else
+                    ROS_ERROR("[OPT-1] Failed to read USB version from sysfs for device %s:%s",
+                        vendorId.c_str(), productId.c_str());
+                #endif
+                return false;
+            }
+
+            float version = 0.0f;
+            try {
+                version = std::stof(ver_str);
+            } catch (...) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+                        "[OPT-1] Failed to parse USB version string: '%s'", ver_str.c_str());
+                #else
+                    ROS_ERROR("[OPT-1] Failed to parse USB version string: '%s'", ver_str.c_str());
+                #endif
+                return false;
+            }
+
+            auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+            #ifdef ROS2
+                RCLCPP_INFO(rclcpp::get_logger("usb_check"),
+                    "[OPT-1] USB version check via sysfs: %.2f (sysfs path: %s, elapsed: %ld us, "
+                    "原 lsusb 方式约 500ms~2000ms)",
+                    version, dev_path.c_str(), elapsed_us);
+            #else
+                ROS_INFO("[OPT-1] USB version check via sysfs: %.2f (sysfs path: %s, elapsed: %ld us)",
+                    version, dev_path.c_str(), elapsed_us);
+            #endif
+
+            if (!g_strict_usb3_0_check) {
+                #ifdef ROS2
+                    RCLCPP_INFO(rclcpp::get_logger("usb_check"),
+                        "[OPT-1] Strict USB3.0 check disabled, passing version check");
+                #else
+                    ROS_INFO("[OPT-1] Strict USB3.0 check disabled, passing version check");
+                #endif
+                return true;
+            }
+
+            if (version < 3.0f) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+                        "[OPT-1] USB version %.2f < 3.0, device requires USB 3.0 or higher",
+                        version);
+                #else
+                    ROS_ERROR("[OPT-1] USB version %.2f < 3.0, device requires USB 3.0 or higher",
+                        version);
+                #endif
+            }
+            return version >= 3.0f;
+        }
+    } catch (const std::exception& e) {
         #ifdef ROS2
-            RCLCPP_ERROR(rclcpp::get_logger("usb_check"), "Failed to get USB version information");
+            RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+                "[OPT-1] sysfs directory scan error: %s, falling back to false", e.what());
         #else
-            ROS_ERROR("Failed to get USB version information");
+            ROS_ERROR("[OPT-1] sysfs directory scan error: %s, falling back to false", e.what());
         #endif
         return false;
     }
-    
-    // find bcdUSB
-    size_t pos = result.find("bcdUSB");
-    if (pos == std::string::npos) {
-        #ifdef ROS2
-            RCLCPP_ERROR(rclcpp::get_logger("usb_check"), "bcdUSB field not found in lsusb output");
-        #else
-            ROS_ERROR("bcdUSB field not found in lsusb output");
-        #endif
-        return false;
-    }
-    
-    std::string versionStr = result.substr(pos + 7); // "bcdUSB" + space
-    float version = std::stof(versionStr);
-    
+
     #ifdef ROS2
-        RCLCPP_INFO(rclcpp::get_logger("usb_check"), "Detected USB version: %.1f", version);
+        RCLCPP_ERROR(rclcpp::get_logger("usb_check"),
+            "[OPT-1] Device %s:%s not found in sysfs /sys/bus/usb/devices",
+            vendorId.c_str(), productId.c_str());
     #else
-        ROS_INFO("Detected USB version: %.1f", version);
+        ROS_ERROR("[OPT-1] Device %s:%s not found in sysfs /sys/bus/usb/devices",
+            vendorId.c_str(), productId.c_str());
     #endif
-    if (!g_strict_usb3_0_check) {
-        #ifdef ROS2
-            RCLCPP_INFO(rclcpp::get_logger("usb_check"), "Strict USB3.0 check disabled");
-        #else
-            ROS_INFO("Strict USB3.0 check disabled");
-        #endif
-        return true;
-    }
-    return version >= 3.0;
+    return false;
 }
 
 // 通过sysfs检测指定VID/PID的USB设备是否已连接到系统
@@ -1315,7 +1390,28 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
         
         std::string calib_config = config_dir + "/calib.yaml";
         calib_file_ = calib_config;
+
+        // [OPT-3] INITIALIZED 状态时若 calib.yaml 已存在则跳过 USB 文件下载。
+        // 标定数据固化在设备中，仅固件升级时才会变化（届时 initial_state 会是 NOT_INITIALIZED）。
+        // STREAM_STOPPED 状态已有此优化，此处与其保持一致。
+        if (get_calib_file && device->initial_state == LIDAR_DEVICE_INITIALIZED
+                && std::filesystem::exists(calib_config)) {
+            const auto calib_size = std::filesystem::file_size(calib_config);
+            #ifdef ROS2
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                    "[OPT-3] Device state=INITIALIZED, calib.yaml already exists (%.1f KB), "
+                    "skipping USB download",
+                    calib_size / 1024.0);
+            #else
+                ROS_INFO("[OPT-3] Device state=INITIALIZED, calib.yaml already exists (%.1f KB), "
+                    "skipping USB download",
+                    calib_size / 1024.0);
+            #endif
+            get_calib_file = false;
+        }
+
         if (get_calib_file) {
+            auto t_calib = std::chrono::steady_clock::now();
             if (lidar_get_calib_file(odinDevice, config_dir.c_str())) {
                 #ifdef ROS2
                     RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Failed to get calibration file");
@@ -1327,11 +1423,13 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
                 odinDevice = nullptr;
                 return;
             }
-            
+            auto calib_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t_calib).count();
             #ifdef ROS2
-                RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Successfully retrieved calibration files");
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                    "Successfully retrieved calibration file via USB (took %ld ms)", calib_ms);
             #else
-                ROS_INFO("Successfully retrieved calibration files");
+                ROS_INFO("Successfully retrieved calibration file via USB (took %ld ms)", calib_ms);
             #endif
         } else {
             #ifdef ROS2
@@ -1341,26 +1439,54 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             #endif
         }
         
+        // [OPT-4] calib.yaml 解析一次，后续所有初始化函数共用同一个 YAML::Node，
+        // 避免 rawCloudRender::init() 和 loadCameraParams() 重复调用 YAML::LoadFile()
+        YAML::Node calib_yaml_node;
+        bool calib_yaml_loaded = false;
         if (std::filesystem::exists(calib_config)) {
+            try {
+                auto t_yaml = std::chrono::steady_clock::now();
+                calib_yaml_node = YAML::LoadFile(calib_config);
+                calib_yaml_loaded = true;
+                auto yaml_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - t_yaml).count();
+                #ifdef ROS2
+                    RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                        "[OPT-4] calib.yaml parsed once and shared (took %ld us)", yaml_us);
+                #else
+                    ROS_INFO("[OPT-4] calib.yaml parsed once and shared (took %ld us)", yaml_us);
+                #endif
+            } catch (const std::exception& e) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("device_cb"),
+                        "Failed to parse calib.yaml: %s", e.what());
+                #else
+                    ROS_ERROR("Failed to parse calib.yaml: %s", e.what());
+                #endif
+            }
+        }
+
+        if (calib_yaml_loaded) {
             g_renderer = std::make_shared<rawCloudRender>();
-            if (g_renderer->init(calib_config)) {
-            #ifdef ROS2
+            if (g_renderer->init(calib_yaml_node)) {
+                #ifdef ROS2
                     RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Point cloud renderer initialized");
-            #else
+                #else
                     ROS_INFO("Point cloud renderer initialized");
-            #endif
+                #endif
             } else {
-            #ifdef ROS2
+                #ifdef ROS2
                     RCLCPP_ERROR(rclcpp::get_logger("device_cb"), "Failed to initialize point cloud renderer");
-            #else
+                #else
                     ROS_ERROR("Failed to initialize point cloud renderer");
-            #endif
-                }
+                #endif
+            }
         } else {
             #ifdef ROS2
-                    RCLCPP_WARN(rclcpp::get_logger("device_cb"), "Renderer config file not found: %s", calib_config.c_str());
+                RCLCPP_WARN(rclcpp::get_logger("device_cb"),
+                    "Renderer config file not found or parse failed: %s", calib_config.c_str());
             #else
-                    ROS_WARN("Renderer config file not found: %s", calib_config.c_str());
+                ROS_WARN("Renderer config file not found or parse failed: %s", calib_config.c_str());
             #endif
         }
         
@@ -1560,8 +1686,21 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             ROS_INFO("Command interface ready. Use: echo 'set save_map 1' > %s", g_command_file_path.c_str());
         #endif 
         
-        bool load_status = g_ros_object->loadCameraParams(calib_config);
-        if (g_sendrgb_undistort &&  load_status == 0) {
+        // [OPT-4] 复用已解析的 YAML::Node，不再重复 LoadFile
+        bool load_status = false;
+        if (calib_yaml_loaded) {
+            load_status = (g_ros_object->loadCameraParams(calib_yaml_node) == 0);
+            #ifdef ROS2
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                    "[OPT-4] loadCameraParams used pre-parsed YAML::Node (no extra LoadFile)");
+            #else
+                ROS_INFO("[OPT-4] loadCameraParams used pre-parsed YAML::Node (no extra LoadFile)");
+            #endif
+        } else {
+            // 回退：直接从文件加载（calib_yaml_loaded=false 说明文件不存在或解析失败）
+            load_status = (g_ros_object->loadCameraParams(calib_config) == 0);
+        }
+        if (g_sendrgb_undistort && load_status) {
             g_ros_object->buildUndistortMap();
         }
 
@@ -1655,7 +1794,15 @@ int main(int argc, char *argv[])
 
         auto keys = g_parser->getRegisterKeys();
         auto keys_w_str_val = g_parser->getRegisterKeysStrVal();
-        g_parser->printConfig();
+        // [OPT-5] printConfig() 将所有参数输出到 stderr，仅在 DEBUG 等级下打印。
+        // 注意：g_log_level 在后面才会被赋值，这里提前从已解析的 keys 中读取 log_devel 以做判断。
+        {
+            auto it = keys.find("log_devel");
+            int early_log_level = (it != keys.end()) ? it->second : LOG_LEVEL_INFO;
+            if (early_log_level >= LOG_LEVEL_DEBUG) {
+                g_parser->printConfig();
+            }
+        }
 
         auto get_key_value = [&](const std::string& key, int default_value) -> int {
             auto it = keys.find(key);
@@ -1799,10 +1946,11 @@ int main(int argc, char *argv[])
                 }
             }
             
+            // [OPT-2] 轮询间隔从 1s 缩短到 100ms，减少设备就绪后的感知等待时间（最多节省 900ms）
             #ifdef ROS2
-                std::this_thread::sleep_for(std::chrono::seconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
             #else
-                ros::Duration(1.0).sleep();
+                ros::Duration(0.1).sleep();
             #endif
         }
     } catch (const std::exception& e) {

@@ -1431,10 +1431,9 @@ void publishRgb(capture_Image_List_t *stream) {
         }
     }
 
-    // 从YAML文件加载相机内参和畸变系数，并构建多项式相机模型
-    int loadCameraParams(const std::string& yaml_file) {
+    // [OPT-4] 从已解析的 YAML::Node 加载相机内参和畸变系数，避免重复 LoadFile
+    int loadCameraParams(const YAML::Node& config) {
         try {
-            YAML::Node config = YAML::LoadFile(yaml_file);
     
             YAML::Node cam_node = config["cam_0"];
     
@@ -1496,6 +1495,19 @@ void publishRgb(capture_Image_List_t *stream) {
 
             m_cam_init_success = true;
             return 0;
+        } catch (const std::exception& e) {
+            std::cerr << "读取YAML参数失败: " << e.what() << std::endl;
+            m_cam_init_success = false;
+            return -1;
+        }
+    }
+
+    // 从YAML文件加载相机内参和畸变系数，并构建多项式相机模型
+    // [OPT-4] 如果已有解析好的 YAML::Node，请直接调用 loadCameraParams(const YAML::Node&) 避免重复 LoadFile
+    int loadCameraParams(const std::string& yaml_file) {
+        try {
+            YAML::Node config = YAML::LoadFile(yaml_file);
+            return loadCameraParams(config);
         } catch (const std::exception& e) {
             std::cerr << "读取YAML文件失败: " << e.what() << std::endl;
             m_cam_init_success = false;

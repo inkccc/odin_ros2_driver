@@ -17,6 +17,7 @@ limitations under the License.
 #include <string>
 #include <Eigen/Dense>
 #include "lidar_api.h"
+#include <yaml-cpp/yaml.h>
 
 namespace GlobalCameraParams {
     extern float g_fx;
@@ -39,6 +40,9 @@ public:
 
     // 从 calib.yaml 加载相机内参（畸变系数、焦距等）和外参（相机-激光雷达变换矩阵）
     bool init(const std::string& yamlFilePath);
+
+    // [OPT-4] 从已解析的 YAML::Node 初始化，避免重复解析同一文件
+    bool init(const YAML::Node& config);
 
     // 将设备 NV12 格式图像缓冲区转换为 RGB 浮点二维数组
     void nv12buffer_2_rgb(buffer_List_t &image, std::vector<std::vector<float>>& rgb_image);

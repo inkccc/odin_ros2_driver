@@ -36,12 +36,7 @@ bool YamlParser::loadConfig() {
             return false;
         }
 
-        // Print file contents
-        std::ifstream file(config_file_);
-        std::string content((std::istreambuf_iterator<char>(file)),
-                           std::istreambuf_iterator<char>());
-        std::cerr << "Config file content:\n" << content << "\n--- End of file ---" << std::endl;
-
+        // [OPT-5] 移除冗余的文件全文打印（原本二次读取整个文件再输出到 stderr，在生产环境无意义）
         // Load YAML
         YAML::Node config = YAML::LoadFile(config_file_);
 
