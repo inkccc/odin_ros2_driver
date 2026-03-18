@@ -84,6 +84,7 @@ private:
 
     CameraParams camera_params_;
     ExtrinsicParams extrinsic_params_;
+    Eigen::Matrix4d T_cam_imu_; // 预计算的 Tic 逆矩阵，避免每帧重复求逆
     std::unique_ptr<mini_vikit::PolynomialCamera> camera_model_;
 
     int point_radius_ = 4;

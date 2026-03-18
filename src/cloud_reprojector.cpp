@@ -40,6 +40,8 @@ bool CloudReprojector::initialize(const CameraParams& cam_params, const Extrinsi
         camera_params_.k5, camera_params_.k6, camera_params_.k7
     );
 
+    T_cam_imu_ = extrinsic_params_.Tic.inverse();
+
     initialized_ = true;
     return true;
 }
@@ -78,11 +80,9 @@ cv::Mat CloudReprojector::reprojectCloud(const pcl::PointCloud<pcl::PointXYZRGB>
     // T_imu_odom: transforms points from odom frame to imu frame
     Eigen::Matrix4d T_imu_odom = T_odom_imu.inverse();
 
-    // T_cam_imu = Tic.inverse(): transforms from imu to camera
-    Eigen::Matrix4d T_cam_imu = extrinsic_params_.Tic.inverse();
-
     // T_cam_odom: transforms points from odom frame to camera frame
-    Eigen::Matrix4d T_cam_odom = T_cam_imu * T_imu_odom;
+    // T_cam_imu_ 已在 initialize() 中预计算 (= Tic.inverse())
+    Eigen::Matrix4d T_cam_odom = T_cam_imu_ * T_imu_odom;
 
     pcl::PointCloud<pcl::PointXYZRGB> cloud_in_cam;
     pcl::transformPointCloud(cloud_odom, cloud_in_cam, T_cam_odom);
