@@ -27,93 +27,90 @@ bool fileExists(const std::string& filename) {
 }
 
 // 从 calib.yaml 文件加载相机标定参数，并注册到指定 ROS2 节点的参数服务器
-bool loadCalibParameters(std::shared_ptr<rclcpp::Node> node, const std::string& calib_file_path) {
+// log_intrinsics / log_extrinsics：由 control_command.yaml 中对应 flag 控制是否打印详细参数日志
+bool loadCalibParameters(std::shared_ptr<rclcpp::Node> node, const std::string& calib_file_path,
+                         bool log_intrinsics, bool log_extrinsics) {
     try {
-        RCLCPP_INFO(node->get_logger(), "Loading parameters from calib.yaml file: %s", calib_file_path.c_str());
-        
+        RCLCPP_INFO(node->get_logger(), "Loading parameters from calib.yaml: %s", calib_file_path.c_str());
+
         YAML::Node config = YAML::LoadFile(calib_file_path);
-        
+
         if (config["cam_num"]) {
             int cam_num = config["cam_num"].as<int>();
             node->declare_parameter("cam_num", cam_num);
-            RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_num = %d", cam_num);
         }
-        
+
         if (config["img_topic_0"]) {
             std::string img_topic = config["img_topic_0"].as<std::string>();
             node->declare_parameter("img_topic_0", img_topic);
-            RCLCPP_INFO(node->get_logger(), "Loaded parameter: img_topic_0 = %s", img_topic.c_str());
         }
-        
+
+        // [LOG] 外参 Tcl_0：受 log_calib_extrinsics flag 控制
         if (config["Tcl_0"]) {
             std::vector<double> tcl_matrix = config["Tcl_0"].as<std::vector<double>>();
             node->declare_parameter("Tcl_0", tcl_matrix);
-            RCLCPP_INFO(node->get_logger(), "Loaded parameter: Tcl_0 (transform matrix with %zu elements)", tcl_matrix.size());
+            if (log_extrinsics) {
+                RCLCPP_INFO(node->get_logger(),
+                    "[calib] Tcl_0 (camera-to-lidar, %zu elements):", tcl_matrix.size());
+                RCLCPP_INFO(node->get_logger(),
+                    "  [%.6f  %.6f  %.6f  %.6f]", tcl_matrix[0],  tcl_matrix[1],  tcl_matrix[2],  tcl_matrix[3]);
+                RCLCPP_INFO(node->get_logger(),
+                    "  [%.6f  %.6f  %.6f  %.6f]", tcl_matrix[4],  tcl_matrix[5],  tcl_matrix[6],  tcl_matrix[7]);
+                RCLCPP_INFO(node->get_logger(),
+                    "  [%.6f  %.6f  %.6f  %.6f]", tcl_matrix[8],  tcl_matrix[9],  tcl_matrix[10], tcl_matrix[11]);
+                RCLCPP_INFO(node->get_logger(),
+                    "  [%.6f  %.6f  %.6f  %.6f]", tcl_matrix[12], tcl_matrix[13], tcl_matrix[14], tcl_matrix[15]);
+            }
         }
-        
+
         if (config["cam_0"]) {
             YAML::Node cam_0 = config["cam_0"];
-            
+
             if (cam_0["cam_model"]) {
-                std::string cam_model = cam_0["cam_model"].as<std::string>();
-                node->declare_parameter("cam_0.cam_model", cam_model);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.cam_model = %s", cam_model.c_str());
+                node->declare_parameter("cam_0.cam_model", cam_0["cam_model"].as<std::string>());
             }
-            
             if (cam_0["image_width"]) {
-                int image_width = cam_0["image_width"].as<int>();
-                node->declare_parameter("cam_0.image_width", image_width);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.image_width = %d", image_width);
+                node->declare_parameter("cam_0.image_width", cam_0["image_width"].as<int>());
             }
-            
             if (cam_0["image_height"]) {
-                int image_height = cam_0["image_height"].as<int>();
-                node->declare_parameter("cam_0.image_height", image_height);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.image_height = %d", image_height);
+                node->declare_parameter("cam_0.image_height", cam_0["image_height"].as<int>());
             }
-            
+
             std::vector<std::string> distortion_params = {"k2", "k3", "k4", "k5", "k6", "k7", "p1", "p2"};
             for (const auto& param : distortion_params) {
-                if (cam_0[param]) {
-                    double value = cam_0[param].as<double>();
-                    node->declare_parameter("cam_0." + param, value);
-                    RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.%s = %f", param.c_str(), value);
-                }
+                if (cam_0[param]) node->declare_parameter("cam_0." + param, cam_0[param].as<double>());
             }
-            
+
             std::vector<std::string> intrinsic_params = {"A11", "A12", "A22", "u0", "v0"};
             for (const auto& param : intrinsic_params) {
-                if (cam_0[param]) {
-                    double value = cam_0[param].as<double>();
-                    node->declare_parameter("cam_0." + param, value);
-                    RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.%s = %f", param.c_str(), value);
-                }
+                if (cam_0[param]) node->declare_parameter("cam_0." + param, cam_0[param].as<double>());
             }
-            
-            if (cam_0["isFast"]) {
-                int is_fast = cam_0["isFast"].as<int>();
-                node->declare_parameter("cam_0.isFast", is_fast);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.isFast = %d", is_fast);
-            }
-            
-            if (cam_0["numDiff"]) {
-                int num_diff = cam_0["numDiff"].as<int>();
-                node->declare_parameter("cam_0.numDiff", num_diff);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.numDiff = %d", num_diff);
-            }
-            
-            if (cam_0["maxIncidentAngle"]) {
-                int max_incident_angle = cam_0["maxIncidentAngle"].as<int>();
-                node->declare_parameter("cam_0.maxIncidentAngle", max_incident_angle);
-                RCLCPP_INFO(node->get_logger(), "Loaded parameter: cam_0.maxIncidentAngle = %d", max_incident_angle);
+
+            if (cam_0["isFast"])           node->declare_parameter("cam_0.isFast",           cam_0["isFast"].as<int>());
+            if (cam_0["numDiff"])          node->declare_parameter("cam_0.numDiff",           cam_0["numDiff"].as<int>());
+            if (cam_0["maxIncidentAngle"]) node->declare_parameter("cam_0.maxIncidentAngle",  cam_0["maxIncidentAngle"].as<int>());
+
+            // [LOG] 内参日志：受 log_calib_intrinsics flag 控制
+            if (log_intrinsics) {
+                RCLCPP_INFO(node->get_logger(), "[calib] Camera intrinsics (pcd2depth_ros2_node):");
+                RCLCPP_INFO(node->get_logger(), "  Image size: %dx%d",
+                    cam_0["image_width"].as<int>(), cam_0["image_height"].as<int>());
+                RCLCPP_INFO(node->get_logger(),
+                    "  fx(A11)=%.6f  skew(A12)=%.6f  fy(A22)=%.6f  cx(u0)=%.6f  cy(v0)=%.6f",
+                    cam_0["A11"].as<double>(), cam_0["A12"].as<double>(), cam_0["A22"].as<double>(),
+                    cam_0["u0"].as<double>(),  cam_0["v0"].as<double>());
+                RCLCPP_INFO(node->get_logger(),
+                    "  Distortion: k2=%.6f  k3=%.6f  k4=%.6f  k5=%.6f  k6=%.6f  k7=%.6f",
+                    cam_0["k2"].as<double>(), cam_0["k3"].as<double>(), cam_0["k4"].as<double>(),
+                    cam_0["k5"].as<double>(), cam_0["k6"].as<double>(), cam_0["k7"].as<double>());
             }
         }
-        
+
         RCLCPP_INFO(node->get_logger(), "Successfully loaded all parameters from calib.yaml");
         return true;
-        
+
     } catch (const YAML::Exception& e) {
-        RCLCPP_ERROR(node->get_logger(), "YAML parsing error: %s", e.what());
+        RCLCPP_ERROR(node->get_logger(), "YAML parsing error while loading calib.yaml: %s", e.what());
         return false;
     } catch (const std::exception& e) {
         RCLCPP_ERROR(node->get_logger(), "Error loading calib parameters: %s", e.what());
@@ -163,20 +160,37 @@ int main(int argc, char **argv)
             throw std::runtime_error("Missing 'senddepth' parameter");
         }  
     int senddepth = config["register_keys"]["senddepth"].as<int>();
-    std::cout << "senddepth: " <<    senddepth << std::endl;
     if(senddepth == 0)
     {
-        RCLCPP_INFO(node->get_logger(), "Depth image will not be published.");
+        RCLCPP_INFO(node->get_logger(), "Depth image will not be published (senddepth=0).");
         return 0;
     }
-    
+
+    // [LOG] 读取日志控制 flag（来自 control_command.yaml 的 register_keys 节点）
+    auto get_flag = [&](const std::string& key, int default_val) -> int {
+        if (config["register_keys"][key]) {
+            try { return config["register_keys"][key].as<int>(); } catch (...) {}
+        }
+        return default_val;
+    };
+    bool log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
+    bool log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
+    bool log_calib_waiting    = get_flag("log_calib_waiting",    1) != 0;
+    RCLCPP_INFO(node->get_logger(),
+        "[LOG] log_calib_intrinsics=%d  log_calib_extrinsics=%d  log_calib_waiting=%d",
+        (int)log_calib_intrinsics, (int)log_calib_extrinsics, (int)log_calib_waiting);
+
     std::string calib_file_path = node->declare_parameter<std::string>("calib_file_path", "");
-    
-    RCLCPP_INFO(node->get_logger(), "Waiting for calib.yaml file at: %s", calib_file_path.c_str());
+
+    // [Item 5] 等待 calib.yaml：轮询日志受 log_calib_waiting 控制（默认开启，关闭后仅首条提示保留）
+    RCLCPP_INFO(node->get_logger(), "Waiting for calib.yaml at: %s", calib_file_path.c_str());
     while(rclcpp::ok() && !fileExists(calib_file_path))
     {
-        RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 5000, "Still waiting for calib.yaml file...");
-        rclcpp::sleep_for(std::chrono::milliseconds(500)); // 等待0.5秒后再检查
+        if (log_calib_waiting) {
+            RCLCPP_INFO_THROTTLE(node->get_logger(), *node->get_clock(), 5000,
+                "Still waiting for calib.yaml... (set log_calib_waiting=0 to suppress)");
+        }
+        rclcpp::sleep_for(std::chrono::milliseconds(500));
         rclcpp::spin_some(node);
     }
     
@@ -188,7 +202,7 @@ int main(int argc, char **argv)
     
     RCLCPP_INFO(node->get_logger(), "Found calib.yaml file! Loading parameters...");
     
-    if (!loadCalibParameters(node, calib_file_path)) {
+    if (!loadCalibParameters(node, calib_file_path, log_calib_intrinsics, log_calib_extrinsics)) {
         RCLCPP_ERROR(node->get_logger(), "Failed to load parameters from calib.yaml file");
         return 1;
     }

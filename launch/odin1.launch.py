@@ -90,12 +90,13 @@ def generate_launch_description() -> LaunchDescription:
     )
     with open(config_path_pcd2depth, 'r') as f:
         pcd2depth_params = yaml.safe_load(f)
-    # 将 calib.yaml 路径注入节点参数（设备连接后由主驱动节点自动生成至 config/ 目录）
-    pcd2depth_calib_path = os.path.join(
-        package_dir,
-        'config',
-        'calib.yaml'
-    )
+    # [FIX Item 6] calib.yaml 路径改为 source 目录
+    # host_sdk_sample 设备连接后将 calib.yaml 下载并保存到 source 目录的 config/；
+    # 原来指向 install/share/... 的静态路径不会被 host_sdk_sample 更新，
+    # 修复后 pcd2depth_ros2_node 与 host_sdk_sample 读写同一文件，确保使用最新设备标定
+    # 此文件位于 launch/ 目录，向上两级即为包根目录（odin_ros2_driver/）
+    package_source_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pcd2depth_calib_path = os.path.join(package_source_dir, 'config', 'calib.yaml')
     pcd2depth_params['calib_file_path'] = pcd2depth_calib_path
     action_pcd2depth_ros2_node = Node(
         package='odin_ros2_driver',
@@ -117,12 +118,9 @@ def generate_launch_description() -> LaunchDescription:
     )
     with open(config_path_cloud_reprojection, 'r') as f:
         reprojection_params = yaml.safe_load(f)
-    # 将 calib.yaml 路径注入节点参数
-    reprojection_calib_path = os.path.join(
-        package_dir,
-        'config',
-        'calib.yaml'
-    )
+    # [FIX Item 6] 同 pcd2depth，使用 source 目录路径保持一致
+    # （cloud_reprojection_ros2_node 内部自行通过 __FILE__ 计算路径，此参数作为备用路径记录）
+    reprojection_calib_path = os.path.join(package_source_dir, 'config', 'calib.yaml')
     reprojection_params['calib_file_path'] = reprojection_calib_path
     action_cloud_reprojection_ros2_node = Node(
         package='odin_ros2_driver',

@@ -139,6 +139,35 @@ register_keys:
   # 0: 关闭; 1: 开启
   save_log: 0
 
+  # ============ 日志控制 ============
+
+  # ===== control_command.yaml 参数加载日志 =====
+  # 控制是否在启动时打印每一个被加载的 register_keys 参数
+  # 正常运行时建议关闭以减少噪声；排查配置问题时开启，或设置 log_devel: 4 (DEBUG) 查看完整列表
+  # 0: 关闭（仅打印文件路径和 key 总数）; 1: 开启（打印每一个 key 的键值）
+  log_config_loading: 0
+
+  # ===== calib.yaml 相机内参加载日志 =====
+  # 控制是否在启动时打印 calib.yaml 中的相机内参（焦距、主点、畸变系数）
+  # 首次部署或更换设备时建议开启以核对参数；日常运行建议关闭
+  # 影响范围: host_sdk_sample (rawCloudRender 初始化) / pcd2depth_ros2_node / cloud_reprojection_ros2_node
+  # 0: 关闭; 1: 开启
+  log_calib_intrinsics: 0
+
+  # ===== calib.yaml 相机外参加载日志 =====
+  # 控制是否在启动时打印 calib.yaml 中的相机外参（相机-激光雷达变换矩阵 Tcl）
+  # 首次部署或重新标定后建议开启以核对矩阵；日常运行建议关闭
+  # 影响范围: host_sdk_sample (rawCloudRender 初始化 + loadCameraParams) / pcd2depth_ros2_node / cloud_reprojection_ros2_node
+  # 0: 关闭; 1: 开启
+  log_calib_extrinsics: 0
+
+  # ===== calib.yaml 等待轮询日志 =====
+  # 控制是否在等待 calib.yaml 文件生成期间打印轮询状态日志
+  # 建议保持开启：若设备连接异常导致 calib.yaml 未生成，此日志是唯一的可见提示
+  # 影响范围: pcd2depth_ros2_node / cloud_reprojection_ros2_node
+  # 0: 关闭; 1: 开启（推荐）
+  log_calib_waiting: 1
+
   # ============ 可视化设置 ============
 
   # ===== 强度灰度图 =====

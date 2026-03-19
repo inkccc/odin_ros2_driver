@@ -1183,25 +1183,23 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             #endif
             return;
         }
-	const std::string package_name = "odin_ros2_driver";
-	std::string config_dir = "";
-	#ifdef ROS2
-	    char* ros_workspace = std::getenv("COLCON_PREFIX_PATH");
-	    if (ros_workspace) {
-		std::string workspace_path(ros_workspace);
-		size_t pos = workspace_path.find("/install");
-		if (pos != std::string::npos) {
-		    config_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/config";
-		} else {
-		    config_dir = ament_index_cpp::get_package_share_directory(package_name) + "/config";
-		}
-	    } else {
-		config_dir = ament_index_cpp::get_package_share_directory(package_name) + "/config";
-	    }
-	#else
-	    config_dir = ros::package::getPath(package_name) + "/config";
-	#endif
-   		 std::cout << "config_dir"<< config_dir <<std::endl;
+        // [FIX] 使用与 main() 统一的路径解析方式（基于编译期 __FILE__ 宏向上查找 package.xml）
+        // 原实现通过 COLCON_PREFIX_PATH 硬拼 "/src/odin_ros2_driver"，当包位于子目录时路径错误
+        // （如 src/driver/odin_ros2_driver，原实现会丢失 driver/ 层级，导致 calib.yaml 找不到）
+        std::string config_dir = "";
+        #ifdef ROS2
+            try {
+                config_dir = get_package_source_directory() + "/config";
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(rclcpp::get_logger("device_cb"),
+                    "[FIX] get_package_source_directory() failed (%s), fallback to package share dir", e.what());
+                config_dir = ament_index_cpp::get_package_share_directory("odin_ros2_driver") + "/config";
+            }
+            RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                "[FIX] config_dir resolved via source path: %s", config_dir.c_str());
+        #else
+            config_dir = ros::package::getPath("odin_ros2_driver") + "/config";
+        #endif
         #ifdef ROS2
             RCLCPP_INFO(rclcpp::get_logger("device_cb"), "Calibration files will be saved to: %s", config_dir.c_str());
         #else
@@ -1832,6 +1830,16 @@ int main(int argc, char *argv[])
         g_use_host_ros_time = get_key_value("use_host_ros_time", 0);
         g_save_log = get_key_value("save_log", 0);
 
+        // [LOG] 日志控制 flag：从 control_command.yaml 读取并写入 rawCloudRender.cpp 中定义的全局变量
+        // g_log_calib_intrinsics / g_log_calib_extrinsics 同时控制 rawCloudRender::init() 和 loadCameraParams() 中的输出
+        g_log_calib_intrinsics = get_key_value("log_calib_intrinsics", 0) != 0;
+        g_log_calib_extrinsics = get_key_value("log_calib_extrinsics", 0) != 0;
+        #ifdef ROS2
+            RCLCPP_INFO(rclcpp::get_logger("init"),
+                "[LOG] log_calib_intrinsics=%d, log_calib_extrinsics=%d (set via control_command.yaml)",
+                (int)g_log_calib_intrinsics, (int)g_log_calib_extrinsics);
+        #endif
+
         if (g_send_odom_baselink_tf) {
             g_rosNodeControlImpl.setSendOdomBaseLinkTF(true);
         }
@@ -1854,28 +1862,26 @@ int main(int argc, char *argv[])
         std::string log_dir = "";
         std::string map_dir = "";
         #ifdef ROS2
-            char* ros_workspace = std::getenv("COLCON_PREFIX_PATH");
-            if (ros_workspace) {
-                std::string workspace_path(ros_workspace);
-                size_t pos = workspace_path.find("/install");
-                if (pos != std::string::npos) {
-                    data_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/recorddata";
-                    log_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/log";
-                    map_dir = workspace_path.substr(0, pos) + "/src/odin_ros2_driver/map";
-                } else {
-                    data_dir = ament_index_cpp::get_package_share_directory(package_name) + "/recorddata";
-                    log_dir = ament_index_cpp::get_package_share_directory(package_name) + "/log";
-                    map_dir = ament_index_cpp::get_package_share_directory(package_name) + "/map";
-                }
-            } else {
-                data_dir = ament_index_cpp::get_package_share_directory(package_name) + "/recorddata";
-                log_dir = ament_index_cpp::get_package_share_directory(package_name) + "/log";
-                map_dir = ament_index_cpp::get_package_share_directory(package_name) + "/map";
+            // [FIX] 同 config_dir，使用 get_package_source_directory() 确保路径正确
+            try {
+                std::string src_root = get_package_source_directory();
+                data_dir = src_root + "/recorddata";
+                log_dir  = src_root + "/log";
+                map_dir  = src_root + "/map";
+                RCLCPP_INFO(rclcpp::get_logger("init"),
+                    "[FIX] data/log/map dirs resolved via source path: %s/{recorddata,log,map}", src_root.c_str());
+            } catch (const std::exception& e) {
+                RCLCPP_WARN(rclcpp::get_logger("init"),
+                    "[FIX] get_package_source_directory() failed (%s), fallback to package share dir", e.what());
+                std::string share_root = ament_index_cpp::get_package_share_directory(package_name);
+                data_dir = share_root + "/recorddata";
+                log_dir  = share_root + "/log";
+                map_dir  = share_root + "/map";
             }
         #else
             data_dir = ros::package::getPath(package_name) + "/recorddata";
-            log_dir = ros::package::getPath(package_name) + "/log";
-            map_dir = ros::package::getPath(package_name) + "/map";
+            log_dir  = ros::package::getPath(package_name) + "/log";
+            map_dir  = ros::package::getPath(package_name) + "/map";
         #endif
 
         if (g_record_data) {

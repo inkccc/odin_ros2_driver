@@ -1483,7 +1483,23 @@ void publishRgb(capture_Image_List_t *stream) {
                     for (int i = 0; i < 16; ++i) Tcl(i/4, i%4) = T[i].as<double>();
                     T_cl_ = Tcl;
                 }
-                std::cout << "Tcl: " << T_cl_ << std::endl;
+                // [LOG] 外参日志：受 control_command.yaml 中 log_calib_extrinsics flag 控制
+                if (g_log_calib_extrinsics) {
+                    #ifdef ROS2
+                        RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                            "[loadCameraParams] Tcl (camera-to-lidar):\n"
+                            "  [%.6f  %.6f  %.6f  %.6f]\n"
+                            "  [%.6f  %.6f  %.6f  %.6f]\n"
+                            "  [%.6f  %.6f  %.6f  %.6f]\n"
+                            "  [%.6f  %.6f  %.6f  %.6f]",
+                            T_cl_(0,0), T_cl_(0,1), T_cl_(0,2), T_cl_(0,3),
+                            T_cl_(1,0), T_cl_(1,1), T_cl_(1,2), T_cl_(1,3),
+                            T_cl_(2,0), T_cl_(2,1), T_cl_(2,2), T_cl_(2,3),
+                            T_cl_(3,0), T_cl_(3,1), T_cl_(3,2), T_cl_(3,3));
+                    #else
+                        std::cout << "Tcl: " << T_cl_ << std::endl;
+                    #endif
+                }
 
                 Eigen::Matrix4d Tic = T_il_ * T_cl_.inverse();
                 Eigen::Matrix3d Ric = Tic.block<3,3>(0,0);

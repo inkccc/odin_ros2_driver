@@ -28,21 +28,23 @@ YamlParser::YamlParser(const std::string& config_file)
 // 加载并解析 YAML 配置文件，提取 register_keys 节点下的所有参数
 bool YamlParser::loadConfig() {
     try {
-        std::cerr << "Loading config file: " << config_file_ << std::endl;
+        // [LOG] 仅打印文件路径和 key 总数，不逐个打印每个 key（避免启动日志噪声）
+        // 如需查看所有 key，请在 control_command.yaml 中设置 log_devel: 4 (DEBUG)，启动后 printConfig() 会完整输出
+        // 如需在加载过程中看到逐 key 输出，请将 control_command.yaml 中 log_config_loading 设为 1
+        std::cerr << "[yaml_parser] Loading config: " << config_file_ << std::endl;
 
         // Check if file exists
         if (!std::filesystem::exists(config_file_)) {
-            std::cerr << "Config file not found: " << config_file_ << std::endl;
+            std::cerr << "[yaml_parser] ERROR: Config file not found: " << config_file_ << std::endl;
             return false;
         }
 
-        // [OPT-5] 移除冗余的文件全文打印（原本二次读取整个文件再输出到 stderr，在生产环境无意义）
         // Load YAML
         YAML::Node config = YAML::LoadFile(config_file_);
 
         // Check if 'register_keys' node exists
         if (!config["register_keys"]) {
-            std::cerr << "Missing 'register_keys' section in config file" << std::endl;
+            std::cerr << "[yaml_parser] ERROR: Missing 'register_keys' section in: " << config_file_ << std::endl;
             return false;
         }
 
@@ -51,8 +53,16 @@ bool YamlParser::loadConfig() {
         register_keys_str_val_.clear();
         custom_parameters_.clear();
 
-        // Print number of key-value pairs found
-        std::cerr << "Found " << register_keys.size() << " keys in config" << std::endl;
+        std::cerr << "[yaml_parser] Found " << register_keys.size() << " keys in config" << std::endl;
+
+        // [LOG] 读取 log_config_loading flag（仅检查，不依赖完整 parse 结果）
+        bool verbose = false;
+        if (register_keys["log_config_loading"]) {
+            try { verbose = register_keys["log_config_loading"].as<int>() != 0; } catch (...) {}
+        }
+        if (verbose) {
+            std::cerr << "[yaml_parser] log_config_loading=1: per-key loading output enabled" << std::endl;
+        }
 
         for (YAML::const_iterator it = register_keys.begin(); it != register_keys.end(); ++it) {
             std::string key = it->first.as<std::string>();
@@ -75,7 +85,7 @@ bool YamlParser::loadConfig() {
                         param_value.type = DataType::INT_TYPE;
                         param_value.setData(int_value);
                         custom_parameters_[param_name] = param_value;
-                        std::cerr << "Loaded custom parameter (int): " << param_name << " = " << int_value << std::endl;
+                        if (verbose) std::cerr << "Loaded custom parameter (int): " << param_name << " = " << int_value << std::endl;
                     } catch (...) {
                         try {
                             double float_value = value_node.as<double>();
@@ -84,9 +94,9 @@ bool YamlParser::loadConfig() {
                             std::vector<float> float_array = {static_cast<float>(float_value)};
                             param_value.setArray(float_array);
                             custom_parameters_[param_name] = param_value;
-                            std::cerr << "Loaded custom parameter (float): " << param_name << " = " << float_value << std::endl;
+                            if (verbose) std::cerr << "Loaded custom parameter (float): " << param_name << " = " << float_value << std::endl;
                         } catch (const std::exception& e) {
-                            std::cerr << "Failed to parse custom parameter " << param_name << ": " << e.what() << std::endl;
+                            std::cerr << "[yaml_parser] ERROR: Failed to parse custom parameter " << param_name << ": " << e.what() << std::endl;
                         }
                     }
                 } else if (value_node.IsSequence()) {
@@ -109,32 +119,34 @@ bool YamlParser::loadConfig() {
                         param_value.setArray(float_array);
                         custom_parameters_[param_name] = param_value;
 
-                        std::cerr << "Loaded custom parameter (float array): " << param_name << " = [";
-                        for (size_t i = 0; i < float_array.size(); ++i) {
-                            if (i > 0) std::cerr << ", ";
-                            std::cerr << std::fixed << std::setprecision(4) << float_array[i];
+                        if (verbose) {
+                            std::cerr << "Loaded custom parameter (float array): " << param_name << " = [";
+                            for (size_t i = 0; i < float_array.size(); ++i) {
+                                if (i > 0) std::cerr << ", ";
+                                std::cerr << std::fixed << std::setprecision(4) << float_array[i];
+                            }
+                            std::cerr << "]" << std::endl;
                         }
-                        std::cerr << "]" << std::endl;
                     } catch (const std::exception& e) {
-                        std::cerr << "Failed to parse custom parameter array " << param_name << ": " << e.what() << std::endl;
+                        std::cerr << "[yaml_parser] ERROR: Failed to parse custom parameter array " << param_name << ": " << e.what() << std::endl;
                     }
                 }
             } else if (allowed_key_w_str_val.find(key) != allowed_key_w_str_val.end()) {
                 try {
                     std::string value = value_node.as<std::string>();
                     register_keys_str_val_[key] = value;
-                    std::cerr << "Loaded key: " << key << " = " << value << std::endl;
+                    if (verbose) std::cerr << "Loaded key: " << key << " = " << value << std::endl;
                 } catch (const std::exception& e) {
-                    std::cerr << "Failed to parse key " << key << ": " << e.what() << std::endl;
+                    std::cerr << "[yaml_parser] ERROR: Failed to parse key " << key << ": " << e.what() << std::endl;
                 }
             } else {
                 // Regular (non-custom) integer parameter
                 try {
                     int value = value_node.as<int>();
                     register_keys_[key] = value;
-                    std::cerr << "Loaded key: " << key << " = " << value << std::endl;
+                    if (verbose) std::cerr << "Loaded key: " << key << " = " << value << std::endl;
                 } catch (const std::exception& e) {
-                    std::cerr << "Failed to parse key " << key << ": " << e.what() << std::endl;
+                    std::cerr << "[yaml_parser] ERROR: Failed to parse key " << key << ": " << e.what() << std::endl;
                 }
             }
         }
@@ -212,14 +224,12 @@ bool YamlParser::applyCustomParameters(device_handle device) {
     bool success = true;
 
     for (const auto& [param_name, param_value] : custom_parameters_) {
-        std::cerr << "Setting custom parameter: " << param_name << " (size=" << param_value.getSize() << " bytes)" << std::endl;
-
+        // [LOG] 仅在加载时有错误才输出，正常发送过程静默（减少日志噪声）
         int result = lidar_set_custom_parameter(device, param_name.c_str(), param_value.getData(), param_value.getSize());
         if (result != 0) {
-            std::cerr << "Failed to set custom parameter " << param_name << ": error code " << result << std::endl;
+            std::cerr << "[yaml_parser] ERROR: Failed to set custom parameter " << param_name
+                      << ": error code " << result << std::endl;
             success = false;
-        } else {
-            std::cerr << "Successfully set custom parameter " << param_name << std::endl;
         }
     }
 
