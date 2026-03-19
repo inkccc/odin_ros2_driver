@@ -34,6 +34,11 @@ namespace GlobalCameraParams {
     extern Eigen::Matrix4f g_T_camera_lidar;
 }
 
+// [LOG] 日志控制全局变量：由 host_sdk_sample::main() 从 control_command.yaml 读取后赋值
+// 在 rawCloudRender::init() 调用之前必须已赋值；默认均为 false（静默模式）
+extern bool g_log_calib_intrinsics;  // 控制内参日志（焦距、主点、畸变系数）
+extern bool g_log_calib_extrinsics;  // 控制外参日志（Tcl 相机-激光雷达变换矩阵）
+
 // 原始点云彩色渲染器：将 DTOF 点云通过相机外参投影到 RGB 图像，生成彩色点云
 class rawCloudRender {
 public:

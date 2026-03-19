@@ -16,11 +16,14 @@ limitations under the License.
 #include <iostream>
 #include <vector>
 #include <Eigen/Dense>
-#include <algorithm> 
-#include <iostream> 
+#include <algorithm>
+#include <iostream>
 #include <cmath>
 #include <array>
 #include <algorithm>
+#ifdef ROS2
+    #include <rclcpp/rclcpp.hpp>
+#endif
 
 struct ValidPointInfo {
     float x;
@@ -45,7 +48,12 @@ namespace GlobalCameraParams {
     float g_k7 = 0.0f;
     Eigen::Matrix4f g_T_camera_lidar = Eigen::Matrix4f::Identity();
 }
-bool raw_debug=0;
+bool raw_debug = false;
+
+// [LOG] 日志控制全局变量定义（声明见 rawCloudRender.h）
+// 由 host_sdk_sample::main() 在解析 control_command.yaml 后写入，默认 false（静默）
+bool g_log_calib_intrinsics = false;
+bool g_log_calib_extrinsics = false;
 
 // [OPT-4] 从已解析的 YAML::Node 初始化，供外部传入预解析节点以避免重复 LoadFile
 bool rawCloudRender::init(const YAML::Node& config) {
@@ -91,23 +99,54 @@ bool rawCloudRender::init(const YAML::Node& config) {
         tclNode[8].as<float>(), tclNode[9].as<float>(), tclNode[10].as<float>(), tclNode[11].as<float>(),
         tclNode[12].as<float>(), tclNode[13].as<float>(), tclNode[14].as<float>(), tclNode[15].as<float>();
 
-    // === Display key parameters concisely ===
-    std::cout << "=== Camera Calibration Parameters ===" << std::endl;
-    std::cout << "Intrinsics:" << std::endl;
-    std::cout << "  fx: " << GlobalCameraParams::g_fx
-              << ", fy: " << GlobalCameraParams::g_fy
-              << ", cx: " << GlobalCameraParams::g_cx
-              << ", cy: " << GlobalCameraParams::g_cy << std::endl;
-    std::cout << "Distortion: k2=" << GlobalCameraParams::g_k2
-              << ", k3=" << GlobalCameraParams::g_k3 << std::endl;
+    // [LOG] 内参日志：受 control_command.yaml 中 log_calib_intrinsics flag 控制
+    if (g_log_calib_intrinsics) {
+        #ifdef ROS2
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"), "=== Camera Intrinsics (rawCloudRender) ===");
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  fx=%.6f  fy=%.6f  cx=%.6f  cy=%.6f",
+                GlobalCameraParams::g_fx, GlobalCameraParams::g_fy,
+                GlobalCameraParams::g_cx, GlobalCameraParams::g_cy);
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  Distortion: k2=%.6f  k3=%.6f  k4=%.6f  k5=%.6f  k6=%.6f  k7=%.6f",
+                GlobalCameraParams::g_k2, GlobalCameraParams::g_k3, GlobalCameraParams::g_k4,
+                GlobalCameraParams::g_k5, GlobalCameraParams::g_k6, GlobalCameraParams::g_k7);
+        #else
+            std::cout << "[rawCloudRender] Intrinsics: fx=" << GlobalCameraParams::g_fx
+                      << " fy=" << GlobalCameraParams::g_fy
+                      << " cx=" << GlobalCameraParams::g_cx
+                      << " cy=" << GlobalCameraParams::g_cy << std::endl;
+        #endif
+    }
 
-    Eigen::Vector3f translation = GlobalCameraParams::g_T_camera_lidar.block<3,1>(0,3);
-    Eigen::Matrix3f rotation = GlobalCameraParams::g_T_camera_lidar.block<3,3>(0,0);
-    std::cout << "Extrinsics:" << std::endl;
-    std::cout << "  Translation: [" << translation.x() << ", "
-              << translation.y() << ", " << translation.z() << "]" << std::endl;
-    std::cout << "  Rotation (euler angles): "
-              << rotation.eulerAngles(0,1,2).transpose() * 180/M_PI << "°" << std::endl;
+    // [LOG] 外参日志：受 control_command.yaml 中 log_calib_extrinsics flag 控制
+    if (g_log_calib_extrinsics) {
+        Eigen::Vector3f translation = GlobalCameraParams::g_T_camera_lidar.block<3,1>(0,3);
+        Eigen::Matrix3f rotation    = GlobalCameraParams::g_T_camera_lidar.block<3,3>(0,0);
+        Eigen::Vector3f euler_deg   = rotation.eulerAngles(0,1,2) * (180.0f / M_PI);
+        #ifdef ROS2
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"), "=== Camera Extrinsics Tcl (rawCloudRender) ===");
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  Translation: [%.6f, %.6f, %.6f]",
+                translation.x(), translation.y(), translation.z());
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  Rotation euler (deg): [%.4f, %.4f, %.4f]",
+                euler_deg.x(), euler_deg.y(), euler_deg.z());
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"), "  Full Tcl matrix:");
+            const Eigen::Matrix4f& T = GlobalCameraParams::g_T_camera_lidar;
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  [%.6f  %.6f  %.6f  %.6f]", T(0,0), T(0,1), T(0,2), T(0,3));
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  [%.6f  %.6f  %.6f  %.6f]", T(1,0), T(1,1), T(1,2), T(1,3));
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  [%.6f  %.6f  %.6f  %.6f]", T(2,0), T(2,1), T(2,2), T(2,3));
+            RCLCPP_INFO(rclcpp::get_logger("rawCloudRender"),
+                "  [%.6f  %.6f  %.6f  %.6f]", T(3,0), T(3,1), T(3,2), T(3,3));
+        #else
+            std::cout << "[rawCloudRender] Translation: [" << translation.x()
+                      << ", " << translation.y() << ", " << translation.z() << "]" << std::endl;
+        #endif
+    }
 
     return true;
 }

@@ -93,7 +93,22 @@ void CloudReprojectionRosNode::loadParameters()
     // Load camera parameters from calib.yaml file directly
     std::string package_path = get_package_source_directory();
     std::string calib_file = package_path + "/config/calib.yaml";
-    
+
+    // [LOG] 读取日志控制 flag（来自 control_command.yaml）
+    bool log_calib_intrinsics = false;
+    bool log_calib_extrinsics = false;
+    try {
+        YAML::Node cmd_config = YAML::LoadFile(package_path + "/config/control_command.yaml");
+        auto get_flag = [&](const std::string& key, int def) -> int {
+            if (cmd_config["register_keys"] && cmd_config["register_keys"][key]) {
+                try { return cmd_config["register_keys"][key].as<int>(); } catch (...) {}
+            }
+            return def;
+        };
+        log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
+        log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
+    } catch (...) { /* 读取失败时保持默认值 false */ }
+
     YAML::Node calib_config;
     try {
         calib_config = YAML::LoadFile(calib_file);
@@ -105,19 +120,19 @@ void CloudReprojectionRosNode::loadParameters()
 
     CloudReprojector::CameraParams cam_params;
     try {
-        cam_params.image_width = calib_config["cam_0"]["image_width"].as<int>();
+        cam_params.image_width  = calib_config["cam_0"]["image_width"].as<int>();
         cam_params.image_height = calib_config["cam_0"]["image_height"].as<int>();
         cam_params.A11 = calib_config["cam_0"]["A11"].as<double>();
         cam_params.A12 = calib_config["cam_0"]["A12"].as<double>();
         cam_params.A22 = calib_config["cam_0"]["A22"].as<double>();
-        cam_params.u0 = calib_config["cam_0"]["u0"].as<double>();
-        cam_params.v0 = calib_config["cam_0"]["v0"].as<double>();
-        cam_params.k2 = calib_config["cam_0"]["k2"].as<double>();
-        cam_params.k3 = calib_config["cam_0"]["k3"].as<double>();
-        cam_params.k4 = calib_config["cam_0"]["k4"].as<double>();
-        cam_params.k5 = calib_config["cam_0"]["k5"].as<double>();
-        cam_params.k6 = calib_config["cam_0"]["k6"].as<double>();
-        cam_params.k7 = calib_config["cam_0"]["k7"].as<double>();
+        cam_params.u0  = calib_config["cam_0"]["u0"].as<double>();
+        cam_params.v0  = calib_config["cam_0"]["v0"].as<double>();
+        cam_params.k2  = calib_config["cam_0"]["k2"].as<double>();
+        cam_params.k3  = calib_config["cam_0"]["k3"].as<double>();
+        cam_params.k4  = calib_config["cam_0"]["k4"].as<double>();
+        cam_params.k5  = calib_config["cam_0"]["k5"].as<double>();
+        cam_params.k6  = calib_config["cam_0"]["k6"].as<double>();
+        cam_params.k7  = calib_config["cam_0"]["k7"].as<double>();
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Failed to parse camera parameters: %s", e.what());
         rclcpp::shutdown();
@@ -128,15 +143,12 @@ void CloudReprojectionRosNode::loadParameters()
     CloudReprojector::ExtrinsicParams ext_params;
     try {
         auto Tcl_vec = calib_config["Tcl_0"].as<std::vector<double>>();
-        
-        if (Tcl_vec.size() == 16)
-        {
+
+        if (Tcl_vec.size() == 16) {
             for (int i = 0; i < 4; ++i)
                 for (int j = 0; j < 4; ++j)
                     ext_params.Tcl(i, j) = Tcl_vec[i * 4 + j];
-        }
-        else
-        {
+        } else {
             RCLCPP_ERROR(this->get_logger(), "Tcl_0 has invalid size: %zu (expected 16)", Tcl_vec.size());
             rclcpp::shutdown();
             return;
@@ -150,14 +162,25 @@ void CloudReprojectionRosNode::loadParameters()
     ext_params.Til = getFixedTil();
     ext_params.Tic = CloudReprojector::calculateTic(ext_params.Tcl, ext_params.Til);
 
-    RCLCPP_INFO_STREAM(this->get_logger(), "Loaded Tcl (camera to lidar):\n" << ext_params.Tcl);
-    RCLCPP_INFO_STREAM(this->get_logger(), "Fixed Til (lidar to imu):\n" << ext_params.Til);
-    RCLCPP_INFO_STREAM(this->get_logger(), "Calculated Tic:\n" << ext_params.Tic);
+    // [LOG] 外参日志：受 log_calib_extrinsics flag 控制
+    if (log_calib_extrinsics) {
+        RCLCPP_INFO_STREAM(this->get_logger(),
+            "[calib] Tcl (camera-to-lidar):\n" << ext_params.Tcl);
+        RCLCPP_INFO_STREAM(this->get_logger(),
+            "[calib] Fixed Til (lidar-to-imu):\n" << ext_params.Til);
+        RCLCPP_INFO_STREAM(this->get_logger(),
+            "[calib] Calculated Tic (camera-to-imu):\n" << ext_params.Tic);
+    }
 
-    RCLCPP_INFO(this->get_logger(), "Camera intrinsics:");
-    RCLCPP_INFO(this->get_logger(), "Image size: %dx%d", cam_params.image_width, cam_params.image_height);
-    RCLCPP_INFO(this->get_logger(), "Intrinsics: A11=%f A12=%f A22=%f u0=%f v0=%f",
-                cam_params.A11, cam_params.A12, cam_params.A22, cam_params.u0, cam_params.v0);
+    // [LOG] 内参日志：受 log_calib_intrinsics flag 控制
+    if (log_calib_intrinsics) {
+        RCLCPP_INFO(this->get_logger(), "[calib] Camera intrinsics (cloud_reprojection_ros2_node):");
+        RCLCPP_INFO(this->get_logger(), "  Image size: %dx%d",
+            cam_params.image_width, cam_params.image_height);
+        RCLCPP_INFO(this->get_logger(),
+            "  fx(A11)=%.6f  skew(A12)=%.6f  fy(A22)=%.6f  cx(u0)=%.6f  cy(v0)=%.6f",
+            cam_params.A11, cam_params.A12, cam_params.A22, cam_params.u0, cam_params.v0);
+    }
 
     reprojector_ = std::make_unique<CloudReprojector>();
     if (!reprojector_->initialize(cam_params, ext_params))
@@ -210,41 +233,60 @@ int main(int argc, char** argv)
     // Check if reprojection is enabled from control_command.yaml
     std::string package_path = get_package_source_directory();
     std::string config_file = package_path + "/config/control_command.yaml";
-    
+
+    // [LOG] 日志控制 flag，从 control_command.yaml 读取
+    bool log_calib_intrinsics = false;
+    bool log_calib_extrinsics = false;
+    bool log_calib_waiting    = true;  // 默认开启等待轮询日志
+
     try {
         YAML::Node config = YAML::LoadFile(config_file);
-        std::cout << "config: " << config_file << std::endl;
         if (!config["register_keys"] || !config["register_keys"]["sendreprojection"]) {
             RCLCPP_INFO(temp_node->get_logger(), "sendreprojection parameter not found, cloud reprojection disabled.");
             rclcpp::shutdown();
             return 0;
         }
-        
+
         int sendreprojection = config["register_keys"]["sendreprojection"].as<int>();
         if (sendreprojection == 0) {
             RCLCPP_INFO(temp_node->get_logger(), "Cloud reprojection will not be published.");
             rclcpp::shutdown();
             return 0;
         }
+
+        // 读取日志控制 flag
+        auto get_flag = [&](const std::string& key, int def) -> int {
+            if (config["register_keys"][key]) {
+                try { return config["register_keys"][key].as<int>(); } catch (...) {}
+            }
+            return def;
+        };
+        log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
+        log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
+        log_calib_waiting    = get_flag("log_calib_waiting",    1) != 0;
+        RCLCPP_INFO(temp_node->get_logger(),
+            "[LOG] log_calib_intrinsics=%d  log_calib_extrinsics=%d  log_calib_waiting=%d",
+            (int)log_calib_intrinsics, (int)log_calib_extrinsics, (int)log_calib_waiting);
+
     } catch (const std::exception& e) {
         RCLCPP_ERROR(temp_node->get_logger(), "Failed to read config: %s", e.what());
         rclcpp::shutdown();
         return 1;
     }
 
-    // Wait for calib.yaml file to be generated by host_sdk_sample
+    // [Item 5] 等待 calib.yaml：轮询日志受 log_calib_waiting 控制
     std::string calib_file = package_path + "/config/calib.yaml";
-    RCLCPP_INFO(temp_node->get_logger(), "Waiting for calib.yaml file at: %s", calib_file.c_str());
-    
+    RCLCPP_INFO(temp_node->get_logger(), "Waiting for calib.yaml at: %s", calib_file.c_str());
+
     int wait_count = 0;
     while (rclcpp::ok() && !fileExists(calib_file)) {
-        if (wait_count % 10 == 0) {
-            RCLCPP_INFO(temp_node->get_logger(), "Still waiting for calib.yaml file...");
+        if (log_calib_waiting && wait_count % 10 == 0) {
+            RCLCPP_INFO(temp_node->get_logger(),
+                "Still waiting for calib.yaml... (set log_calib_waiting=0 to suppress)");
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(5000));
         wait_count++;
-        
-        // Timeout after 5 seconds
+
         if (wait_count > 10) {
             RCLCPP_ERROR(temp_node->get_logger(), "Timeout waiting for calib.yaml file");
             rclcpp::shutdown();
