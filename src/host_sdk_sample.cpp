@@ -123,6 +123,7 @@ int g_show_camerapose = 0;
 int g_strict_usb3_0_check = 0;
 int g_use_host_ros_time = 0;
 int g_save_log = 0;
+int g_save_cam_in_ex = 0;
 int g_cloud_raw_confidence_threshold = 35;
 int g_dtof_fps = 145;  // DTOF sensor frame rate: 100 (10fps) or 145 (14.5fps)
 
@@ -304,8 +305,8 @@ static void signal_handler(int signum) {
 
         // Close device
         if (odinDevice) {
-            // Convert calib.yaml to cam_in_ex.txt at program end
-            if (g_ros_object) {
+            // Convert calib.yaml to cam_in_ex.txt at program end (only if save_cam_in_ex: 1)
+            if (g_ros_object && g_save_cam_in_ex) {
                 const std::filesystem::path out_path = g_ros_object->get_root_dir() / "image" / "cam_in_ex.txt";
                 (void)convert_calib_to_cam_in_ex(calib_file_, out_path);
 
@@ -1207,7 +1208,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
         #endif
 
         std::filesystem::path per_con_log_root_dir;
-        {
+        if (g_devstatus_log || g_save_log) {
             auto connection_time = std::chrono::system_clock::now();
             std::time_t t = std::chrono::system_clock::to_time_t(connection_time);
             std::tm tm{};
@@ -1609,31 +1610,33 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             return;
         }
         
-        std::string dev_status_csv_file_path_ = per_con_log_root_dir / "dev_status.csv";
+        if (g_devstatus_log) {
+            std::string dev_status_csv_file_path_ = per_con_log_root_dir / "dev_status.csv";
 
-        if (dev_status_csv_file) {
-            std::fflush(dev_status_csv_file);
-            fclose(dev_status_csv_file);
-            dev_status_csv_file = nullptr;
-        }
+            if (dev_status_csv_file) {
+                std::fflush(dev_status_csv_file);
+                fclose(dev_status_csv_file);
+                dev_status_csv_file = nullptr;
+            }
 
-        // Open the file in append mode
-        dev_status_csv_file = fopen(dev_status_csv_file_path_.c_str(), "a");
-        if (!dev_status_csv_file) {
-            #ifdef ROS2
-                RCLCPP_ERROR(rclcpp::get_logger("init"), "Failed to open dev_status CSV file");
-            #else
-                ROS_ERROR("Failed to open dev_status CSV file");
-            #endif
-        } else {
-            const char* header =
-            "uptime_seconds,package_temp,cpu_temp,center_temp,gpu_temp,npu_temp,dtof_tx_temp,dtof_rx_temp,"
-            "cpu0,cpu1,cpu2,cpu3,cpu4,cpu5,cpu6,cpu7,ram_use(%),"
-            "rgb_configured_odr,rgb_tx_odr,rgb_rx_odr,dtof_configured_odr,dtof_tx_odr,dtof_rx_odr,imu_configured_odr,imu_tx_odr,imu_rx_odr,"
-            "slam_cloud_tx_odr,slam_cloud_rx_odr,slam_odom_tx_odr,slam_odom_rx_odr,slam_odom_highfreq_tx_odr,slam_odom_highfreq_rx_odr,"
-            "host_ram_use(mb)\n";
-            fprintf(dev_status_csv_file, "%s", header);
-            std::fflush(dev_status_csv_file);
+            // Open the file in append mode
+            dev_status_csv_file = fopen(dev_status_csv_file_path_.c_str(), "a");
+            if (!dev_status_csv_file) {
+                #ifdef ROS2
+                    RCLCPP_ERROR(rclcpp::get_logger("init"), "Failed to open dev_status CSV file");
+                #else
+                    ROS_ERROR("Failed to open dev_status CSV file");
+                #endif
+            } else {
+                const char* header =
+                "uptime_seconds,package_temp,cpu_temp,center_temp,gpu_temp,npu_temp,dtof_tx_temp,dtof_rx_temp,"
+                "cpu0,cpu1,cpu2,cpu3,cpu4,cpu5,cpu6,cpu7,ram_use(%),"
+                "rgb_configured_odr,rgb_tx_odr,rgb_rx_odr,dtof_configured_odr,dtof_tx_odr,dtof_rx_odr,imu_configured_odr,imu_tx_odr,imu_rx_odr,"
+                "slam_cloud_tx_odr,slam_cloud_rx_odr,slam_odom_tx_odr,slam_odom_rx_odr,slam_odom_highfreq_tx_odr,slam_odom_highfreq_rx_odr,"
+                "host_ram_use(mb)\n";
+                fprintf(dev_status_csv_file, "%s", header);
+                std::fflush(dev_status_csv_file);
+            }
         }
 
         uint32_t dtof_subframe_odr = 0;
@@ -1829,6 +1832,7 @@ int main(int argc, char *argv[])
         g_strict_usb3_0_check = get_key_value("strict_usb3.0_check", 1);
         g_use_host_ros_time = get_key_value("use_host_ros_time", 0);
         g_save_log = get_key_value("save_log", 0);
+        g_save_cam_in_ex = get_key_value("save_cam_in_ex", 0);
 
         // [LOG] 日志控制 flag：从 control_command.yaml 读取并写入 rawCloudRender.cpp 中定义的全局变量
         // g_log_calib_intrinsics / g_log_calib_extrinsics 同时控制 rawCloudRender::init() 和 loadCameraParams() 中的输出
@@ -2059,8 +2063,8 @@ int main(int argc, char *argv[])
 
     // Cleanup on normal program exit
     if (odinDevice) {
-        // Convert calib.yaml to cam_in_ex.txt at program end
-        if (g_ros_object) {
+        // Convert calib.yaml to cam_in_ex.txt at program end (only if save_cam_in_ex: 1)
+        if (g_ros_object && g_save_cam_in_ex) {
             const std::filesystem::path out_path = g_ros_object->get_root_dir() / "image" / "cam_in_ex.txt";
             (void)convert_calib_to_cam_in_ex(calib_file_, out_path);
         }

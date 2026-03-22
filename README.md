@@ -2,7 +2,7 @@
 
 适用于 Manifold Tech Ltd. Odin1 传感器模块的 **ROS2 Humble** 驱动功能包。
 
-- 官方 Wiki：https://manifoldtechltd.github.io/wiki/Odin1/Cover.html
+- 官方 Wiki：[https://manifoldtechltd.github.io/wiki/odin_series/odin1/](https://manifoldtechltd.github.io/wiki/odin_series/odin1/)
 - 支持平台：**Ubuntu 22.04.5 LTS** + **ROS2 Humble**（x86_64 / ARM aarch64）
 
 ---
@@ -15,12 +15,14 @@
 
 ## 1. 版本信息
 
-| 项目 | 版本 |
-|------|------|
-| 驱动版本 | v0.9.0 |
-| 设备固件要求 | v0.10.0+ |
-| 支持系统 | Ubuntu 22.04.5 LTS |
-| ROS 版本 | ROS2 Humble |
+
+| 项目     | 版本                 |
+| ------ | ------------------ |
+| 驱动版本   | v0.9.0             |
+| 设备固件要求 | v0.10.0+           |
+| 支持系统   | Ubuntu 22.04.5 LTS |
+| ROS 版本 | ROS2 Humble        |
+
 
 ---
 
@@ -35,9 +37,10 @@
 ### 2.2 安装 ROS2 Humble
 
 若尚未安装 ROS2 Humble，请参考官方文档：
-https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html
+[https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)
 
 快速安装（推荐）：
+
 ```bash
 # 设置软件源
 sudo apt install software-properties-common curl
@@ -149,6 +152,7 @@ ros2 launch odin_ros_driver odin1.launch.py
 ```
 
 启动后将自动运行以下节点：
+
 - `host_sdk_sample`：主驱动节点，与 Odin1 设备建立 USB 连接
 - `pcd2depth_ros2_node`：深度图生成节点（需在配置文件中启用）
 - `cloud_reprojection_ros2_node`：点云重投影节点（需在配置文件中启用）
@@ -170,17 +174,19 @@ ros2 launch odin_ros_driver odin1.launch.py rviz_config:=/path/to/your.rviz
 
 主要配置项一览：
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `strict_usb3.0_check` | 0 | USB 3.0 强制检查（推荐生产环境开启） |
-| `use_host_ros_time` | 2 | 时间戳同步模式（0=设备时间，1=主机接收时间，2=PTP同步） |
-| `sendrgb` | 1 | 发布 BGR8 解码图像 |
-| `senddtof` | 1 | 发布原始 DTOF 点云 |
-| `sendcloudslam` | 1 | 发布 SLAM 点云 |
-| `sendcloudrender` | 1 | 发布彩色渲染点云 |
-| `senddepth` | 0 | 发布稠密深度图（计算量大，默认关闭） |
-| `sendreprojection` | 0 | 发布点云重投影图（默认关闭） |
-| `custom_map_mode` | 0 | 工作模式（0=里程计，1=SLAM建图，2=重定位） |
+
+| 参数                    | 默认值 | 说明                               |
+| --------------------- | --- | -------------------------------- |
+| `strict_usb3.0_check` | 0   | USB 3.0 强制检查（推荐生产环境开启）           |
+| `use_host_ros_time`   | 2   | 时间戳同步模式（0=设备时间，1=主机接收时间，2=PTP同步） |
+| `sendrgb`             | 1   | 发布 BGR8 解码图像                     |
+| `senddtof`            | 1   | 发布原始 DTOF 点云                     |
+| `sendcloudslam`       | 1   | 发布 SLAM 点云                       |
+| `sendcloudrender`     | 1   | 发布彩色渲染点云                         |
+| `senddepth`           | 0   | 发布稠密深度图（计算量大，默认关闭）               |
+| `sendreprojection`    | 0   | 发布点云重投影图（默认关闭）                   |
+| `custom_map_mode`     | 0   | 工作模式（0=里程计，1=SLAM建图，2=重定位）       |
+
 
 ---
 
@@ -188,28 +194,32 @@ ros2 launch odin_ros_driver odin1.launch.py rviz_config:=/path/to/your.rviz
 
 设备连接后，驱动将发布以下话题：
 
-| 话题名称 | 消息类型 | 说明 |
-|----------|----------|------|
-| `/odin1/cloud_raw` | `sensor_msgs/PointCloud2` | 原始 DTOF 点云（XYZI + 置信度 + 时间偏移） |
-| `/odin1/cloud_slam` | `sensor_msgs/PointCloud2` | SLAM 全局点云地图（XYZRGB） |
-| `/odin1/cloud_render` | `sensor_msgs/PointCloud2` | 与 RGB 融合的彩色点云 |
-| `/odin1/image` | `sensor_msgs/Image` | 解码 RGB 图像（BGR8） |
-| `/odin1/image/compressed` | `sensor_msgs/CompressedImage` | 原始 JPEG 压缩图像 |
-| `/odin1/image_undistort` | `sensor_msgs/Image` | 去畸变 RGB 图像（需启用） |
-| `/odin1/imu` | `sensor_msgs/Imu` | IMU 数据（加速度 + 角速度） |
-| `/odin1/odometry` | `nav_msgs/Odometry` | 里程计位姿（位置 + 姿态 + 速度） |
-| `/odin1/odometry_high` | `nav_msgs/Odometry` | 高频里程计 |
-| `/odin1/path` | `nav_msgs/Path` | 历史轨迹路径（需启用 showpath） |
-| `/odin1/depth_img_completion` | `sensor_msgs/Image` | 稠密深度图 32FC1（需启用 senddepth） |
-| `/odin1/reprojected_image` | `sensor_msgs/Image` | 点云重投影可视化图（需启用 sendreprojection） |
-| `/tf` | `tf2_msgs/TFMessage` | 坐标变换（odom → base_link） |
+
+| 话题名称                          | 消息类型                          | 说明                              |
+| ----------------------------- | ----------------------------- | ------------------------------- |
+| `/odin1/cloud_raw`            | `sensor_msgs/PointCloud2`     | 原始 DTOF 点云（XYZI + 置信度 + 时间偏移）   |
+| `/odin1/cloud_slam`           | `sensor_msgs/PointCloud2`     | SLAM 全局点云地图（XYZRGB）             |
+| `/odin1/cloud_render`         | `sensor_msgs/PointCloud2`     | 与 RGB 融合的彩色点云                   |
+| `/odin1/image`                | `sensor_msgs/Image`           | 解码 RGB 图像（BGR8）                 |
+| `/odin1/image/compressed`     | `sensor_msgs/CompressedImage` | 原始 JPEG 压缩图像                    |
+| `/odin1/image_undistort`      | `sensor_msgs/Image`           | 去畸变 RGB 图像（需启用）                 |
+| `/odin1/imu`                  | `sensor_msgs/Imu`             | IMU 数据（加速度 + 角速度）               |
+| `/odin1/odometry`             | `nav_msgs/Odometry`           | 里程计位姿（位置 + 姿态 + 速度）             |
+| `/odin1/odometry_high`        | `nav_msgs/Odometry`           | 高频里程计                           |
+| `/odin1/path`                 | `nav_msgs/Path`               | 历史轨迹路径（需启用 showpath）            |
+| `/odin1/depth_img_completion` | `sensor_msgs/Image`           | 稠密深度图 32FC1（需启用 senddepth）      |
+| `/odin1/reprojected_image`    | `sensor_msgs/Image`           | 点云重投影可视化图（需启用 sendreprojection） |
+| `/tf`                         | `tf2_msgs/TFMessage`          | 坐标变换（odom → base_link）          |
+
 
 ### 原始点云格式说明
 
 `/odin1/cloud_raw` 使用自定义点结构：
+
 ```
 字段: x, y, z (float32), intensity (uint8), confidence (uint16), offset_time (float32)
 ```
+
 - `confidence` 范围：0 ~ 1300，推荐过滤阈值：30 ~ 35
 - `offset_time`：相对于帧基准时间的偏移（秒）
 
@@ -222,6 +232,7 @@ ros2 launch odin_ros_driver odin1.launch.py rviz_config:=/path/to/your.rviz
 ```yaml
 custom_map_mode: 0
 ```
+
 - 仅输出实时位姿估计，不建图
 - 计算量最小，适合对实时性要求高的场景
 
@@ -230,10 +241,12 @@ custom_map_mode: 0
 ```yaml
 custom_map_mode: 1
 ```
+
 - 完整 SLAM 系统，支持回环检测
 - 自动缓存地图数据
 
 **保存地图：**
+
 ```bash
 # 运行期间执行保存命令
 ./set_param.sh save_map 1
@@ -242,6 +255,7 @@ custom_map_mode: 1
 地图默认保存至：`{工作空间}/src/odin_ros_driver/map/{启动时间}/`
 
 也可通过配置文件指定：
+
 ```yaml
 mapping_result_dest_dir: "/home/user/maps/"
 mapping_result_file_name: "my_room.bin"
@@ -270,6 +284,7 @@ senddepth: 1
 ```
 
 **工作原理**：
+
 1. 订阅 `/odin1/cloud_raw`（稀疏点云）和 `/odin1/image`（RGB 图像）
 2. 将点云投影到相机坐标系生成稀疏深度图
 3. 上采样至原始分辨率（1600×1296），并用 Sobel 梯度过滤边缘噪声
@@ -358,7 +373,8 @@ odin_ros_driver/
 
 ## 12. 技术支持
 
-- **邮件支持**：support@manifoldtech.cn
-- **官方 Wiki**：https://manifoldtechltd.github.io/wiki/Odin1/Cover.html
+- **邮件支持**：[support@manifoldtech.cn](mailto:support@manifoldtech.cn)
+- **官方 Wiki**：[https://manifoldtechltd.github.io/wiki/Odin1/Cover.html](https://manifoldtechltd.github.io/wiki/Odin1/Cover.html)
 - **许可证**：Apache License 2.0
 - **版权**：Copyright 2025 Manifold Tech Ltd.
+

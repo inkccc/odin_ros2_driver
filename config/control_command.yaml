@@ -13,7 +13,7 @@ register_keys:
   # 0: 使用设备内部时间（推荐，时间戳最准确）
   # 1: 使用主机 ROS 时间（接收时打时间戳，不推荐，会引入网络延迟误差）
   # 2: 将设备时间对齐到主机时间轴（类 PTP 同步，时间戳为主机时间轴上的接收时刻）
-  use_host_ros_time: 2
+  use_host_ros_time: 0
 
   # ===== 数据流总开关 =====
   # 0: 停止所有数据流
@@ -41,7 +41,7 @@ register_keys:
   # 依赖: sendrgb 必须开启
   # 标定参数来源: config/calib.yaml（设备连接后自动生成）
   # 0: 关闭; 1: 开启
-  sendrgbundistort: 0
+  sendrgbundistort: 1
 
   # ============ 传感器数据 ============
 
@@ -85,7 +85,7 @@ register_keys:
   # 100: 10 fps（较低帧率，适合静态场景，数据带宽较小）
   # 145: 14.5 fps（较高帧率，适合动态场景，但增加数据带宽）
   # 注意: 数值单位为实际帧率 × 10
-  dtof_fps: 100
+  dtof_fps: 145
 
   # ============ 高级点云处理 ============
 
@@ -131,13 +131,21 @@ register_keys:
   # 将设备运行状态（温度、CPU 使用率、内存、各数据流帧率等）保存为 CSV 文件
   # 保存路径: {工作空间}/src/odin_ros2_driver/log/Driver_{启动时间}/Conn_{连接时间}/dev_status.csv
   # 0: 关闭; 1: 开启
-  devstatuslog: 1
+  devstatuslog: 0
 
   # ===== SDK 调试日志 =====
   # 开启底层 SDK 的详细调试日志输出
   # 建议仅在排查问题时临时开启
   # 0: 关闭; 1: 开启
   save_log: 0
+
+  # ===== 相机标定导出文件 =====
+  # 程序退出时将 calib.yaml 转换并导出为 cam_in_ex.txt（供 MindCloud 等外部工具使用）
+  # 保存路径: {recorddata 根目录}/image/cam_in_ex.txt
+  # 仅在使用 MindCloud 后处理 OLX 录制数据时需要开启
+  # 若不使用 MindCloud，驱动自身只需 calib.yaml，无需此文件
+  # 0: 关闭（推荐，避免在工作目录生成多余文件）; 1: 开启
+  save_cam_in_ex: 0
 
   # ============ 日志控制 ============
 

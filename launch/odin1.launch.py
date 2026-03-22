@@ -95,7 +95,11 @@ def generate_launch_description() -> LaunchDescription:
     # 原来指向 install/share/... 的静态路径不会被 host_sdk_sample 更新，
     # 修复后 pcd2depth_ros2_node 与 host_sdk_sample 读写同一文件，确保使用最新设备标定
     # 此文件位于 launch/ 目录，向上两级即为包根目录（odin_ros2_driver/）
-    package_source_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 注意：必须使用 os.path.realpath 而非 os.path.abspath：
+    #   colcon --symlink-install 时此文件是 install/share/.../launch/ 下的符号链接，
+    #   abspath 不解析符号链接，导致路径仍指向 install 目录（无 calib.yaml）；
+    #   realpath 解析符号链接，正确指向 src/odin_ros2_driver/
+    package_source_dir = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
     pcd2depth_calib_path = os.path.join(package_source_dir, 'config', 'calib.yaml')
     pcd2depth_params['calib_file_path'] = pcd2depth_calib_path
     action_pcd2depth_ros2_node = Node(
