@@ -105,6 +105,7 @@ private:
         "mapping_result_dest_dir",       // SLAM 地图保存目录
         "mapping_result_file_name",      // SLAM 地图保存文件名
         "odom_child_frame",              // odom TF 子帧名（底盘模式下 odom 的 child_frame_id）
+        "sensor_frame_id",               // 传感器帧名（点云 frame_id 及传感器 TF child_frame_id，默认 "odin1_base_link"）
     };
 
     // 仅主机端使用、不发送到设备 SDK 的 custom_ 参数名白名单

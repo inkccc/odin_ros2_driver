@@ -64,29 +64,42 @@ register_keys:
   # 0: 关闭; 1: 开启
   send_odom_baselink_tf: 1
 
+  # ===== 传感器帧名称 =====
+  # 控制所有点云话题（cloud_raw / cloud_render）的 header.frame_id
+  # 同时作为传感器 TF 的 child_frame_id：
+  #   mode 0: odom → <sensor_frame_id>（直接连接，无外参变换）
+  #   mode 1: <odom_child_frame> → <sensor_frame_id>（静态 TF，由驱动自动广播）
+  # 默认值 "odin1_base_link" 与历史行为完全向后兼容
+  # 修改此值时须同步更新：
+  #   - mode 1: custom_base_to_sensor_tf 所描述的坐标系语义（帧名改变但变换值不变）
+  #   - RViz:   在 Displays → TF 中刷新或修改 odin_ros2.rviz 中的帧名配置
+  sensor_frame_id: "odin1_base_link"
+
   # ===== 里程计 TF 发布模式 =====
   # 控制 odom TF 广播的 child_frame_id 及坐标转换方式
-  # 0: 默认模式 — 直接将传感器位姿作为 odom → odin1_base_link 广播（原有行为，向后兼容）
-  # 1: 底盘模式 — 将传感器位姿通过安装外参逆变换为底盘位姿，广播 odom → <odom_child_frame>
-  #              此时 odin1_base_link 帧由 robot_description（URDF）维护，驱动不再重复广播
-  #              适用于已有完整机器人 URDF 的导航栈（Nav2、move_base 等）
+  # 0: 默认模式 — 传感器原始位姿直接作为 odom → <sensor_frame_id> 广播（向后兼容）
+  # 1: 底盘模式 — 传感器位姿经安装外参逆变换为底盘位姿，广播 odom → <odom_child_frame>
+  #              同时驱动自动广播静态 TF: <odom_child_frame> → <sensor_frame_id>
+  #              TF 树: map ← odom → <odom_child_frame> → <sensor_frame_id>
+  #              适用于需要导航栈（Nav2、move_base）或精确底盘里程计的场景
   # 注意: 仅在 send_odom_baselink_tf: 1 时生效
   odom_tf_mode: 0
 
   # ===== odom TF 子帧名称 =====
-  # odom_tf_mode: 1 时，odom TF 广播的 child_frame_id
+  # odom_tf_mode: 1 时，odom TF 广播的 child_frame_id（即底盘帧名）
   # 通常与 robot_description 中以 odom 为父帧的帧名称一致
   # 常见取值: "base_link"（ROS 标准）或 "base_footprint"（地面投影帧）
   # odom_tf_mode: 0 时本参数不生效
   odom_child_frame: "base_link"
 
   # ===== 传感器到底盘的安装外参 =====
-  # odom_tf_mode: 1 时，用于将传感器坐标系位姿逆变换为底盘坐标系位姿
-  # 语义：T_base_sensor，即 odin1_base_link 在 odom_child_frame 坐标系下的位姿
-  # 格式: [x, y, z, qx, qy, qz, qw]（位置单位: 米，姿态为四元数）
-  # 该值须与 robot_description（URDF）中对应变换保持严格一致，否则 TF 树会出现不一致
-  # odom_tf_mode: 0 时本参数不生效
+  # odom_tf_mode: 1 时使用，有两个作用：
+  #   1. 将传感器坐标系位姿逆变换为底盘坐标系位姿（用于 odom TF 和 /odom 话题）
+  #   2. 作为静态 TF（<odom_child_frame> → <sensor_frame_id>）直接广播
+  # 语义：T_base_sensor，即 <sensor_frame_id> 在 <odom_child_frame> 坐标系下的位姿
+  # 格式: [x, y, z, qx, qy, qz, qw]（位置单位: 米，姿态为单位四元数）
   # 默认值表示传感器与底盘原点重合、无旋转偏移（测试环境下的安全默认值）
+  # odom_tf_mode: 0 时本参数不生效
   custom_base_to_sensor_tf: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
   # ============ DTOF 点云设置 ============

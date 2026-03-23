@@ -90,6 +90,7 @@ double get_ptp_smoothed_offset();
     #include <sensor_msgs/msg/point_field.hpp>
     #include "tf2/LinearMath/Quaternion.h"
     #include "tf2_ros/transform_broadcaster.h"
+    #include "tf2_ros/static_transform_broadcaster.h"  // StaticTransformBroadcaster：用于 mode 1 的传感器安装静态 TF
     namespace ros {
         using namespace rclcpp;
         using namespace std_msgs::msg;
@@ -118,6 +119,7 @@ double get_ptp_smoothed_offset();
     #include <nav_msgs/Path.h>
     #include <sensor_msgs/Image.h>
     #include <tf2_ros/transform_broadcaster.h>
+    #include <tf2_ros/static_transform_broadcaster.h>  // StaticTransformBroadcaster：用于 mode 1 的传感器安装静态 TF
     #include <tf2/LinearMath/Quaternion.h>
     #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
     namespace ros {
@@ -231,10 +233,20 @@ class RosNodeControlInterface {
         virtual const std::string& getOdomChildFrame() const = 0;
 
         // ── 传感器到底盘的安装外参（仅 mode 1 使用）─────────────────────────────
-        // 语义：T_base_sensor（odin1_base_link 在 odom_child_frame 下的位姿）
+        // 语义：T_base_sensor（sensor_frame_id 帧在 odom_child_frame 坐标系下的位姿）
         // 格式：[x, y, z, qx, qy, qz, qw]，须与 URDF 保持严格一致
         virtual void setBaseToSensorTF(const std::array<double, 7>& tf) = 0;
         virtual const std::array<double, 7>& getBaseToSensorTF() const = 0;
+
+        // ── 传感器帧名称（可配置，两种模式下均生效）─────────────────────────────
+        // 用途：
+        //   1. 所有点云话题（cloud_raw / cloud_render）的 header.frame_id
+        //   2. mode 0 下 odom TF 的 child_frame_id（即 odom → <sensor_frame_id>）
+        //   3. mode 1 下静态 TF 的 child_frame_id（即 <odom_child_frame> → <sensor_frame_id>）
+        // 默认值 "odin1_base_link"，可通过 config 中的 sensor_frame_id 参数修改
+        // 修改时须同步更新：URDF 中对应帧名（mode 1）、RViz 配置中的帧显示
+        virtual void setSensorFrameId(const std::string& frame) = 0;
+        virtual const std::string& getSensorFrameId() const = 0;
     };
     
 RosNodeControlInterface* getRosNodeControl();
@@ -561,8 +573,9 @@ void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_m
         const int valid_point_num = rgbCloud_flat.size() / 4;
          
         // Create and publish RGB point cloud
+        // frame_id 使用可配置的传感器帧名（由 sensor_frame_id 参数控制，默认 "odin1_base_link"）
         PointCloud2Msg output_msg;
-        output_msg.header.frame_id = "odin1_base_link";
+        output_msg.header.frame_id = getRosNodeControl()->getSensorFrameId();
         output_msg.header.stamp = rgb_msg->header.stamp; // Use original image timestamp
         output_msg.height = 1;
         output_msg.width = valid_point_num;
@@ -632,7 +645,8 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
     #endif
 
     // Set message header
-    msg->header.frame_id = "odin1_base_link";
+    // frame_id 使用可配置的传感器帧名（由 sensor_frame_id 参数控制，默认 "odin1_base_link"）
+    msg->header.frame_id = getRosNodeControl()->getSensorFrameId();
     #ifdef ROS2
         msg->header.stamp = make_aligned_stamp(cloud.timestamp, node_);
     #else
@@ -1149,11 +1163,11 @@ void publishRgb(capture_Image_List_t *stream) {
 #endif
         
             msg.header.frame_id = "odom";
-            // child_frame_id 根据 odom_tf_mode 动态决定：
-            // mode 0: 传感器帧 "odin1_base_link"（原有行为）
-            // mode 1: 底盘帧（由 odom_child_frame 配置），与 TF 广播保持一致
+            // child_frame_id 根据 odom_tf_mode 动态决定，与 TF 广播保持严格一致：
+            // mode 0: 传感器帧（由 sensor_frame_id 配置，默认 "odin1_base_link"）
+            // mode 1: 底盘帧（由 odom_child_frame 配置，默认 "base_link"）
             msg.child_frame_id = (getRosNodeControl()->getOdomTFMode() == 0)
-                                    ? "odin1_base_link"
+                                    ? getRosNodeControl()->getSensorFrameId()
                                     : getRosNodeControl()->getOdomChildFrame();
 
             //RCLCPP_INFO(rclcpp::get_logger("device_cb"), "odom %ld",odom_data->timestamp_ns);
@@ -1314,10 +1328,10 @@ void publishRgb(capture_Image_List_t *stream) {
                         transformStamped.header.frame_id = "odom";
 
                         if (getRosNodeControl()->getOdomTFMode() == 0) {
-                            // ── mode 0: 默认行为 ──────────────────────────────────────
-                            // 直接将传感器原始位姿作为 odom → odin1_base_link 广播
-                            // 适用于不带 URDF / 不使用导航栈的纯里程计场景
-                            transformStamped.child_frame_id          = "odin1_base_link";
+                            // ── mode 0: 默认行为（ROS2）──────────────────────────────────
+                            // 传感器原始位姿直接作为 odom → <sensor_frame_id> 广播
+                            // sensor_frame_id 可配置（默认 "odin1_base_link"），适用于不带 URDF 的纯里程计场景
+                            transformStamped.child_frame_id          = getRosNodeControl()->getSensorFrameId();
                             transformStamped.transform.translation.x = msg.pose.pose.position.x;
                             transformStamped.transform.translation.y = msg.pose.pose.position.y;
                             transformStamped.transform.translation.z = msg.pose.pose.position.z;
@@ -1329,7 +1343,7 @@ void publishRgb(capture_Image_List_t *stream) {
                             // ── mode 1: 底盘模式（ROS2）──────────────────────────────────
                             // msg.pose.pose 已在 switch 前的"里程计消息坐标系变换"块中完成了
                             // 传感器→底盘的变换（T_odom_base），此处直接读取即可，无需重复计算
-                            // TF 树: map ← odom → base_link → odin1_base_link（后者由 URDF 维护）
+                            // TF 树: map ← odom → <odom_child_frame> → <sensor_frame_id>（后者由驱动静态 TF 维护）
                             transformStamped.child_frame_id          = getRosNodeControl()->getOdomChildFrame();
                             transformStamped.transform.translation.x = msg.pose.pose.position.x;
                             transformStamped.transform.translation.y = msg.pose.pose.position.y;
@@ -1431,8 +1445,9 @@ void publishRgb(capture_Image_List_t *stream) {
 
                         if (getRosNodeControl()->getOdomTFMode() == 0) {
                             // ── mode 0: 默认行为（ROS1）──────────────────────────────
-                            // 直接将传感器原始位姿作为 odom → odin1_base_link 广播
-                            transformStamped.child_frame_id          = "odin1_base_link";
+                            // 传感器原始位姿直接作为 odom → <sensor_frame_id> 广播
+                            // sensor_frame_id 可配置（默认 "odin1_base_link"），适用于不带 URDF 的纯里程计场景
+                            transformStamped.child_frame_id          = getRosNodeControl()->getSensorFrameId();
                             transformStamped.transform.translation.x = msg.pose.pose.position.x;
                             transformStamped.transform.translation.y = msg.pose.pose.position.y;
                             transformStamped.transform.translation.z = msg.pose.pose.position.z;
@@ -1444,7 +1459,7 @@ void publishRgb(capture_Image_List_t *stream) {
                             // ── mode 1: 底盘模式（ROS1）──────────────────────────────
                             // msg.pose.pose 已在 switch 前的"里程计消息坐标系变换"块中完成了
                             // 传感器→底盘的变换（T_odom_base），此处直接读取即可，无需重复计算
-                            // TF 树: map ← odom → base_link → odin1_base_link（后者由 URDF 维护）
+                            // TF 树: map ← odom → <odom_child_frame> → <sensor_frame_id>（后者由驱动静态 TF 维护）
                             transformStamped.child_frame_id          = getRosNodeControl()->getOdomChildFrame();
                             transformStamped.transform.translation.x = msg.pose.pose.position.x;
                             transformStamped.transform.translation.y = msg.pose.pose.position.y;
@@ -1798,7 +1813,9 @@ private:
             compressed_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", qos_small);
             undistort_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/undistorted", qos_sensor);
             intensity_gray_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/intensity_gray", qos_sensor);
-            tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
+            tf_broadcaster        = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
+            // StaticTransformBroadcaster 使用 transient_local QoS，晚加入的订阅者也能收到静态 TF
+            static_tf_broadcaster = std::make_unique<tf2_ros::StaticTransformBroadcaster>(node_);
         #endif
     }
     #ifdef ROS1
@@ -1816,9 +1833,61 @@ private:
             compressed_rgb_pub_ = nh.advertise<sensor_msgs::CompressedImage>("odin1/image/compressed", 100);
             undistort_rgb_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/undistorted", 100);
             intensity_gray_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/intensity_gray", 100);
-            tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>();
+            tf_broadcaster        = std::make_unique<tf2_ros::TransformBroadcaster>();
+            // ROS1 的 StaticTransformBroadcaster 发布 latched TF，节点重启后需重新调用
+            static_tf_broadcaster = std::make_unique<tf2_ros::StaticTransformBroadcaster>();
         }
     #endif
+
+    // ── mode 1: 广播传感器安装位置的静态 TF ────────────────────────────────────
+    // 语义：T_base_sensor，即 <sensor_frame_id> 在 <odom_child_frame> 坐标系下的安装位姿
+    // 数据来源：config 中的 custom_base_to_sensor_tf 参数（[x, y, z, qx, qy, qz, qw]）
+    //
+    // 调用时机：所有参数加载完毕后由 host_sdk_sample.cpp 调用一次即可。
+    //   StaticTransformBroadcaster（ROS2）使用 transient_local QoS，消息持久保存，
+    //   后续新加入的订阅者（如 RViz、Nav2）能自动收到，无需重复广播。
+    //
+    // 作用：驱动自维护 <odom_child_frame> → <sensor_frame_id> 这一段 TF，
+    //   使以 sensor_frame_id 为 frame_id 的点云话题（cloud_raw / cloud_render）
+    //   可被 RViz、Nav2 costmap 等消费者正确定位，无需依赖外部 URDF/robot_state_publisher。
+    //   mode 0 下无需此 TF（odom 直接连接 sensor_frame_id），故直接 return。
+    void publishSensorMountingTF() {
+        if (getRosNodeControl()->getOdomTFMode() != 1) return;
+
+        const auto& tf7 = getRosNodeControl()->getBaseToSensorTF();
+        // tf7 格式: [x, y, z, qx, qy, qz, qw]，语义为 T_base_sensor
+        // 即 sensor_frame_id 在 odom_child_frame 坐标系下的位姿
+
+#ifdef ROS2
+        geometry_msgs::msg::TransformStamped ts;
+        ts.header.stamp    = node_->now();
+        // parent frame: 底盘帧（如 "base_link"），与 odom TF 的 child_frame_id 一致
+        ts.header.frame_id = getRosNodeControl()->getOdomChildFrame();
+        // child  frame: 传感器帧（如 "odin1_base_link"），与点云 header.frame_id 一致
+        ts.child_frame_id  = getRosNodeControl()->getSensorFrameId();
+        ts.transform.translation.x = tf7[0];
+        ts.transform.translation.y = tf7[1];
+        ts.transform.translation.z = tf7[2];
+        ts.transform.rotation.x    = tf7[3];
+        ts.transform.rotation.y    = tf7[4];
+        ts.transform.rotation.z    = tf7[5];
+        ts.transform.rotation.w    = tf7[6];
+        static_tf_broadcaster->sendTransform(ts);
+#else
+        geometry_msgs::TransformStamped ts;
+        ts.header.stamp    = ros::Time::now();
+        ts.header.frame_id = getRosNodeControl()->getOdomChildFrame();
+        ts.child_frame_id  = getRosNodeControl()->getSensorFrameId();
+        ts.transform.translation.x = tf7[0];
+        ts.transform.translation.y = tf7[1];
+        ts.transform.translation.z = tf7[2];
+        ts.transform.rotation.x    = tf7[3];
+        ts.transform.rotation.y    = tf7[4];
+        ts.transform.rotation.z    = tf7[5];
+        ts.transform.rotation.w    = tf7[6];
+        static_tf_broadcaster->sendTransform(ts);
+#endif
+    }
 
     #ifdef ROS2
         rclcpp::Node::SharedPtr node_;
@@ -1837,7 +1906,9 @@ private:
         rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr intensity_gray_pub_;
         rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_camera_pose_visual_;
         camera_pose_visualization cameraposevisual_;
-        std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
+        std::unique_ptr<tf2_ros::TransformBroadcaster>       tf_broadcaster;
+        // 用于广播 mode 1 下的静态安装 TF（<odom_child_frame> → <sensor_frame_id>）
+        std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster;
     #else
         ros::Publisher imu_pub_;
         ros::Publisher rgb_pub_;
@@ -1854,7 +1925,9 @@ private:
         ros::Publisher compressed_rgb_pub_; // New compressed image publisher
         ros::Publisher undistort_rgb_pub_;
         ros::Publisher intensity_gray_pub_;
-        std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster;
+        std::unique_ptr<tf2_ros::TransformBroadcaster>       tf_broadcaster;
+        // 用于广播 mode 1 下的静态安装 TF（<odom_child_frame> → <sensor_frame_id>）
+        std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster;
     #endif
 };
 

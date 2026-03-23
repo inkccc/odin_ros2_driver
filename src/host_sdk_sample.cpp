@@ -250,6 +250,16 @@ class RosNodeControlImpl : public RosNodeControlInterface {
             return base_to_sensor_tf;
         }
 
+        // ── 传感器帧名称（两种模式下均生效）────────────────────────────────────
+        // 控制所有点云 header.frame_id 及传感器 TF 的 child_frame_id
+        // 对应配置项 sensor_frame_id，默认 "odin1_base_link"
+        void setSensorFrameId(const std::string& frame) override {
+            sensor_frame_id = frame;
+        }
+        const std::string& getSensorFrameId() const override {
+            return sensor_frame_id;
+        }
+
     private:
         int dtof_subframe_interval_time = 0;
         bool pub_use_host_ros_time = false;
@@ -263,6 +273,9 @@ class RosNodeControlImpl : public RosNodeControlInterface {
         std::string odom_child_frame = "base_link";
         // 安装外参 T_base_sensor，格式 [x, y, z, qx, qy, qz, qw]，仅 mode 1 时使用
         std::array<double, 7> base_to_sensor_tf = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};
+        // 传感器帧名称，对应 config 中的 sensor_frame_id，默认 "odin1_base_link" 保持向后兼容
+        // 影响范围：云 frame_id（cloud_raw/cloud_render）+ 传感器 TF child_frame_id（两种模式）
+        std::string sensor_frame_id = "odin1_base_link";
     };
     
 static RosNodeControlImpl g_rosNodeControlImpl;
@@ -1904,6 +1917,23 @@ int main(int argc, char *argv[])
         // 须与 robot_description（URDF）中以 odom 为父帧的帧名称保持一致
         std::string g_odom_child_frame = get_key_str_value("odom_child_frame", "base_link");
         g_rosNodeControlImpl.setOdomChildFrame(g_odom_child_frame);
+
+        // ── 传感器帧名称（两种模式均生效）────────────────────────────────────────
+        // 从配置文件读取 sensor_frame_id（字符串），用于：
+        //   1. 所有点云话题（cloud_raw / cloud_render）的 header.frame_id
+        //   2. mode 0: odom TF 的 child_frame_id（即 odom → <sensor_frame_id>）
+        //   3. mode 1: 静态 TF 的 child_frame_id（即 <odom_child_frame> → <sensor_frame_id>）
+        // 默认值 "odin1_base_link" 与历史行为保持完全向后兼容
+        // 注意：修改此值时须同步更新 URDF 帧名（mode 1）和 RViz 配置中的帧显示
+        std::string g_sensor_frame_id = get_key_str_value("sensor_frame_id", "odin1_base_link");
+        g_rosNodeControlImpl.setSensorFrameId(g_sensor_frame_id);
+
+        // ── mode 1: 广播传感器安装位置的静态 TF ──────────────────────────────────
+        // 三个前置参数（odom_tf_mode / odom_child_frame / sensor_frame_id /
+        //              custom_base_to_sensor_tf）此时均已加载完毕，可以安全广播。
+        // StaticTransformBroadcaster（ROS2）使用 transient_local QoS，调用一次即永久有效；
+        // mode 0 时此函数内部直接 return，不会产生任何 TF 广播，对原有行为无影响。
+        g_ros_object->publishSensorMountingTF();
 
         // ── 安装外参 T_base_sensor（mode 1）──────────────────────────────────────
         // 从配置文件读取 custom_base_to_sensor_tf（7 元素浮点数组：x y z qx qy qz qw）
