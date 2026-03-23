@@ -222,11 +222,47 @@ class RosNodeControlImpl : public RosNodeControlInterface {
         int cloudRawConfidenceThreshold() const {
             return cloud_raw_confidence_threshold;
         }
+
+        // ── odom TF 模式 ──────────────────────────────────────────────────────────
+        // 0: 广播 odom → odin1_base_link（默认），1: 广播 odom → <odom_child_frame>
+        void setOdomTFMode(int mode) override {
+            odom_tf_mode = mode;
+        }
+        int getOdomTFMode() const override {
+            return odom_tf_mode;
+        }
+
+        // ── odom TF 子帧名称（mode 1 时生效）───────────────────────────────────
+        // 通常为 "base_link" 或 "base_footprint"
+        void setOdomChildFrame(const std::string& frame) override {
+            odom_child_frame = frame;
+        }
+        const std::string& getOdomChildFrame() const override {
+            return odom_child_frame;
+        }
+
+        // ── 传感器到底盘的安装外参（mode 1 时生效）─────────────────────────────
+        // 格式 [x, y, z, qx, qy, qz, qw]，语义为 T_base_sensor
+        void setBaseToSensorTF(const std::array<double, 7>& tf) override {
+            base_to_sensor_tf = tf;
+        }
+        const std::array<double, 7>& getBaseToSensorTF() const override {
+            return base_to_sensor_tf;
+        }
+
     private:
         int dtof_subframe_interval_time = 0;
         bool pub_use_host_ros_time = false;
         bool pub_odom_baselink_tf = false;
         int cloud_raw_confidence_threshold = 35;
+
+        // ── odom TF 底盘模式相关成员 ─────────────────────────────────────────────
+        // mode 0: 传感器帧（默认），mode 1: 底盘帧（需配合 URDF）
+        int odom_tf_mode = 0;
+        // odom TF 的 child_frame_id，仅 mode 1 时使用
+        std::string odom_child_frame = "base_link";
+        // 安装外参 T_base_sensor，格式 [x, y, z, qx, qy, qz, qw]，仅 mode 1 时使用
+        std::array<double, 7> base_to_sensor_tf = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};
     };
     
 static RosNodeControlImpl g_rosNodeControlImpl;
@@ -1848,6 +1884,12 @@ int main(int argc, char *argv[])
             g_rosNodeControlImpl.setSendOdomBaseLinkTF(true);
         }
 
+        // ── odom TF 模式 ─────────────────────────────────────────────────────────
+        // 从配置文件读取 odom_tf_mode（整型）并写入控制接口
+        // 0: 默认，广播 odom → odin1_base_link；1: 底盘模式，广播 odom → <odom_child_frame>
+        int g_odom_tf_mode = get_key_value("odom_tf_mode", 0);
+        g_rosNodeControlImpl.setOdomTFMode(g_odom_tf_mode);
+
         auto get_key_str_value = [&](const std::string& key, const std::string& default_value) -> std::string {
             auto it = keys_w_str_val.find(key);
             return it != keys_w_str_val.end() ? it->second : default_value;
@@ -1856,6 +1898,33 @@ int main(int argc, char *argv[])
         g_relocalization_map_abs_path = get_key_str_value("relocalization_map_abs_path", "");
         g_mapping_result_dest_dir = get_key_str_value("mapping_result_dest_dir", "");
         g_mapping_result_file_name = get_key_str_value("mapping_result_file_name", "");
+
+        // ── odom TF 子帧名称（mode 1）────────────────────────────────────────────
+        // 从配置文件读取 odom_child_frame（字符串），通常为 "base_link" 或 "base_footprint"
+        // 须与 robot_description（URDF）中以 odom 为父帧的帧名称保持一致
+        std::string g_odom_child_frame = get_key_str_value("odom_child_frame", "base_link");
+        g_rosNodeControlImpl.setOdomChildFrame(g_odom_child_frame);
+
+        // ── 安装外参 T_base_sensor（mode 1）──────────────────────────────────────
+        // 从配置文件读取 custom_base_to_sensor_tf（7 元素浮点数组：x y z qx qy qz qw）
+        // 该参数使用 custom_ 前缀以利用 YamlParser 的浮点数组解析能力，
+        // 但已被列入 host_only_custom_params，不会发送到设备 SDK
+        {
+            const auto& custom_params = g_parser->getCustomParameters();
+            auto tf_it = custom_params.find("base_to_sensor_tf");
+            if (tf_it != custom_params.end()
+                && tf_it->second.type == odin_ros2_driver::DataType::FLOAT_ARRAY_TYPE
+                && tf_it->second.getSize() == 7 * sizeof(float))
+            {
+                const float* arr = reinterpret_cast<const float*>(tf_it->second.getData());
+                std::array<double, 7> tf7;
+                for (int i = 0; i < 7; ++i) {
+                    tf7[i] = static_cast<double>(arr[i]);
+                }
+                g_rosNodeControlImpl.setBaseToSensorTF(tf7);
+            }
+            // 若参数不存在或格式不正确，保留默认值 [0,0,0, 0,0,0,1]（无偏移）
+        }
 
         g_custom_map_mode = g_parser->getCustomMapMode(2);
 

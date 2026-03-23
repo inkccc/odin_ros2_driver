@@ -98,7 +98,20 @@ private:
     std::map<std::string, std::string> register_keys_str_val_;
     std::map<std::string, ParameterValue> custom_parameters_;
 
-    std::unordered_set<std::string> allowed_key_w_str_val = {"relocalization_map_abs_path", "mapping_result_dest_dir", "mapping_result_file_name"};
+    // 允许以字符串形式解析的非 custom_ 前缀参数白名单
+    // 路径类参数和帧名称参数需要在此声明，否则解析时会尝试转为 int 并报错
+    std::unordered_set<std::string> allowed_key_w_str_val = {
+        "relocalization_map_abs_path",   // 重定位地图文件绝对路径
+        "mapping_result_dest_dir",       // SLAM 地图保存目录
+        "mapping_result_file_name",      // SLAM 地图保存文件名
+        "odom_child_frame",              // odom TF 子帧名（底盘模式下 odom 的 child_frame_id）
+    };
+
+    // 仅主机端使用、不发送到设备 SDK 的 custom_ 参数名白名单
+    // applyCustomParameters() 会跳过此集合中的参数，避免向设备发送未知参数导致错误
+    std::unordered_set<std::string> host_only_custom_params = {
+        "base_to_sensor_tf",             // 传感器到底盘的安装外参（仅主机端 odom TF 计算使用）
+    };
 };
 
 }

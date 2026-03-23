@@ -218,6 +218,23 @@ class RosNodeControlInterface {
         virtual bool sendOdomBaseLinkTF() const = 0;
         virtual void setCloudRawConfidenceThreshold(int threshold) = 0;
         virtual int cloudRawConfidenceThreshold() const = 0;
+
+        // ── odom TF 模式 ──────────────────────────────────────────────────────────
+        // mode 0: 直接广播 odom → odin1_base_link（传感器帧），原有默认行为
+        // mode 1: 通过安装外参逆变换为底盘位姿，广播 odom → <odom_child_frame>
+        virtual void setOdomTFMode(int mode) = 0;
+        virtual int  getOdomTFMode() const = 0;
+
+        // ── odom TF 子帧名称（仅 mode 1 使用）───────────────────────────────────
+        // 通常为 "base_link" 或 "base_footprint"，须与 URDF 中的帧名称一致
+        virtual void setOdomChildFrame(const std::string& frame) = 0;
+        virtual const std::string& getOdomChildFrame() const = 0;
+
+        // ── 传感器到底盘的安装外参（仅 mode 1 使用）─────────────────────────────
+        // 语义：T_base_sensor（odin1_base_link 在 odom_child_frame 下的位姿）
+        // 格式：[x, y, z, qx, qy, qz, qw]，须与 URDF 保持严格一致
+        virtual void setBaseToSensorTF(const std::array<double, 7>& tf) = 0;
+        virtual const std::array<double, 7>& getBaseToSensorTF() const = 0;
     };
     
 RosNodeControlInterface* getRosNodeControl();
@@ -1220,16 +1237,68 @@ void publishRgb(capture_Image_List_t *stream) {
                     {
                     if (getRosNodeControl()->sendOdomBaseLinkTF()) {
                         geometry_msgs::msg::TransformStamped transformStamped;
-                        transformStamped.header.stamp = msg.header.stamp;
+                        transformStamped.header.stamp    = msg.header.stamp;
                         transformStamped.header.frame_id = "odom";
-                        transformStamped.child_frame_id = "odin1_base_link";
-                        transformStamped.transform.translation.x = msg.pose.pose.position.x;
-                        transformStamped.transform.translation.y = msg.pose.pose.position.y;
-                        transformStamped.transform.translation.z = msg.pose.pose.position.z;
-                        transformStamped.transform.rotation.x = msg.pose.pose.orientation.x;
-                        transformStamped.transform.rotation.y = msg.pose.pose.orientation.y;
-                        transformStamped.transform.rotation.z = msg.pose.pose.orientation.z;
-                        transformStamped.transform.rotation.w = msg.pose.pose.orientation.w;
+
+                        if (getRosNodeControl()->getOdomTFMode() == 0) {
+                            // ── mode 0: 默认行为 ──────────────────────────────────────
+                            // 直接将传感器原始位姿作为 odom → odin1_base_link 广播
+                            // 适用于不带 URDF / 不使用导航栈的纯里程计场景
+                            transformStamped.child_frame_id          = "odin1_base_link";
+                            transformStamped.transform.translation.x = msg.pose.pose.position.x;
+                            transformStamped.transform.translation.y = msg.pose.pose.position.y;
+                            transformStamped.transform.translation.z = msg.pose.pose.position.z;
+                            transformStamped.transform.rotation.x    = msg.pose.pose.orientation.x;
+                            transformStamped.transform.rotation.y    = msg.pose.pose.orientation.y;
+                            transformStamped.transform.rotation.z    = msg.pose.pose.orientation.z;
+                            transformStamped.transform.rotation.w    = msg.pose.pose.orientation.w;
+                        } else {
+                            // ── mode 1: 底盘模式 ──────────────────────────────────────
+                            // 通过安装外参将传感器位姿逆变换为底盘位姿，广播 odom → <odom_child_frame>
+                            // 适用于已配置 URDF 的完整机器人导航栈（Nav2 / move_base 等）
+                            // TF 树: map ← odom → base_link → odin1_base_link（后者由 URDF 维护）
+                            //
+                            // 变量命名约定：_os = odom→sensor, _bs = base→sensor, _ob = odom→base
+                            //
+                            // 算法：T_odom_base = T_odom_sensor × inv(T_base_sensor)
+                            //   其中 T_base_sensor 来自 config custom_base_to_sensor_tf
+                            //        T_odom_sensor 来自 SDK 实时输出的里程计数据
+
+                            // 从里程计消息中提取传感器在 odom 坐标系下的位姿 T_odom_sensor
+                            Eigen::Quaterniond q_os(
+                                msg.pose.pose.orientation.w,
+                                msg.pose.pose.orientation.x,
+                                msg.pose.pose.orientation.y,
+                                msg.pose.pose.orientation.z);
+                            Eigen::Vector3d t_os(
+                                msg.pose.pose.position.x,
+                                msg.pose.pose.position.y,
+                                msg.pose.pose.position.z);
+
+                            // 从配置参数中读取安装外参 T_base_sensor
+                            // 格式: [x, y, z, qx, qy, qz, qw]
+                            const auto& tf7 = getRosNodeControl()->getBaseToSensorTF();
+                            Eigen::Quaterniond q_bs(tf7[6], tf7[3], tf7[4], tf7[5]); // w,x,y,z
+                            Eigen::Vector3d    t_bs(tf7[0], tf7[1], tf7[2]);
+
+                            // 计算 inv(T_base_sensor) = T_sensor_base
+                            Eigen::Quaterniond q_sb = q_bs.inverse();
+                            Eigen::Vector3d    t_sb = -(q_sb * t_bs);
+
+                            // 合成 T_odom_base = T_odom_sensor × T_sensor_base
+                            Eigen::Quaterniond q_ob = (q_os * q_sb).normalized();
+                            Eigen::Vector3d    t_ob =  t_os + q_os * t_sb;
+
+                            transformStamped.child_frame_id          = getRosNodeControl()->getOdomChildFrame();
+                            transformStamped.transform.translation.x = t_ob.x();
+                            transformStamped.transform.translation.y = t_ob.y();
+                            transformStamped.transform.translation.z = t_ob.z();
+                            transformStamped.transform.rotation.x    = q_ob.x();
+                            transformStamped.transform.rotation.y    = q_ob.y();
+                            transformStamped.transform.rotation.z    = q_ob.z();
+                            transformStamped.transform.rotation.w    = q_ob.w();
+                        }
+
                         tf_broadcaster->sendTransform(transformStamped);
                     }
                     odom_publisher_->publish(msg);
@@ -1316,16 +1385,60 @@ void publishRgb(capture_Image_List_t *stream) {
                     {
                     if (getRosNodeControl()->sendOdomBaseLinkTF()) {
                         geometry_msgs::TransformStamped transformStamped;
-                        transformStamped.header.stamp = msg.header.stamp;
+                        transformStamped.header.stamp    = msg.header.stamp;
                         transformStamped.header.frame_id = "odom";
-                        transformStamped.child_frame_id = "odin1_base_link";
-                        transformStamped.transform.translation.x = msg.pose.pose.position.x;
-                        transformStamped.transform.translation.y = msg.pose.pose.position.y;
-                        transformStamped.transform.translation.z = msg.pose.pose.position.z;
-                        transformStamped.transform.rotation.x = msg.pose.pose.orientation.x;
-                        transformStamped.transform.rotation.y = msg.pose.pose.orientation.y;
-                        transformStamped.transform.rotation.z = msg.pose.pose.orientation.z;
-                        transformStamped.transform.rotation.w = msg.pose.pose.orientation.w;
+
+                        if (getRosNodeControl()->getOdomTFMode() == 0) {
+                            // ── mode 0: 默认行为（ROS1）──────────────────────────────
+                            // 直接将传感器原始位姿作为 odom → odin1_base_link 广播
+                            transformStamped.child_frame_id          = "odin1_base_link";
+                            transformStamped.transform.translation.x = msg.pose.pose.position.x;
+                            transformStamped.transform.translation.y = msg.pose.pose.position.y;
+                            transformStamped.transform.translation.z = msg.pose.pose.position.z;
+                            transformStamped.transform.rotation.x    = msg.pose.pose.orientation.x;
+                            transformStamped.transform.rotation.y    = msg.pose.pose.orientation.y;
+                            transformStamped.transform.rotation.z    = msg.pose.pose.orientation.z;
+                            transformStamped.transform.rotation.w    = msg.pose.pose.orientation.w;
+                        } else {
+                            // ── mode 1: 底盘模式（ROS1）──────────────────────────────
+                            // 通过安装外参将传感器位姿逆变换为底盘位姿，广播 odom → <odom_child_frame>
+                            // 算法同 ROS2 分支：T_odom_base = T_odom_sensor × inv(T_base_sensor)
+
+                            // 从里程计消息中提取传感器在 odom 坐标系下的位姿 T_odom_sensor
+                            Eigen::Quaterniond q_os(
+                                msg.pose.pose.orientation.w,
+                                msg.pose.pose.orientation.x,
+                                msg.pose.pose.orientation.y,
+                                msg.pose.pose.orientation.z);
+                            Eigen::Vector3d t_os(
+                                msg.pose.pose.position.x,
+                                msg.pose.pose.position.y,
+                                msg.pose.pose.position.z);
+
+                            // 从配置参数中读取安装外参 T_base_sensor
+                            // 格式: [x, y, z, qx, qy, qz, qw]
+                            const auto& tf7 = getRosNodeControl()->getBaseToSensorTF();
+                            Eigen::Quaterniond q_bs(tf7[6], tf7[3], tf7[4], tf7[5]); // w,x,y,z
+                            Eigen::Vector3d    t_bs(tf7[0], tf7[1], tf7[2]);
+
+                            // 计算 inv(T_base_sensor) = T_sensor_base
+                            Eigen::Quaterniond q_sb = q_bs.inverse();
+                            Eigen::Vector3d    t_sb = -(q_sb * t_bs);
+
+                            // 合成 T_odom_base = T_odom_sensor × T_sensor_base
+                            Eigen::Quaterniond q_ob = (q_os * q_sb).normalized();
+                            Eigen::Vector3d    t_ob =  t_os + q_os * t_sb;
+
+                            transformStamped.child_frame_id          = getRosNodeControl()->getOdomChildFrame();
+                            transformStamped.transform.translation.x = t_ob.x();
+                            transformStamped.transform.translation.y = t_ob.y();
+                            transformStamped.transform.translation.z = t_ob.z();
+                            transformStamped.transform.rotation.x    = q_ob.x();
+                            transformStamped.transform.rotation.y    = q_ob.y();
+                            transformStamped.transform.rotation.z    = q_ob.z();
+                            transformStamped.transform.rotation.w    = q_ob.w();
+                        }
+
                         tf_broadcaster->sendTransform(transformStamped);
                     }
                     odom_publisher_.publish(msg);

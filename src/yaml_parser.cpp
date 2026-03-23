@@ -224,6 +224,12 @@ bool YamlParser::applyCustomParameters(device_handle device) {
     bool success = true;
 
     for (const auto& [param_name, param_value] : custom_parameters_) {
+        // 跳过仅主机端使用的参数：这些参数由驱动内部消费（例如 odom TF 外参计算），
+        // 不需要也不应发送给设备 SDK（设备不认识会返回错误码）
+        if (host_only_custom_params.find(param_name) != host_only_custom_params.end()) {
+            continue;
+        }
+
         // [LOG] 仅在加载时有错误才输出，正常发送过程静默（减少日志噪声）
         int result = lidar_set_custom_parameter(device, param_name.c_str(), param_value.getData(), param_value.getSize());
         if (result != 0) {
