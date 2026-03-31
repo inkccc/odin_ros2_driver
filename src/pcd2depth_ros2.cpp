@@ -176,9 +176,12 @@ int main(int argc, char **argv)
     bool log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
     bool log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
     bool log_calib_waiting    = get_flag("log_calib_waiting",    1) != 0;
+    bool publish_depth_cloud  = get_flag("senddepthcloud",       1) != 0;
+    bool depth_postprocess    = get_flag("depth_postprocess",    1) != 0;
     RCLCPP_INFO(node->get_logger(),
-        "[LOG] log_calib_intrinsics=%d  log_calib_extrinsics=%d  log_calib_waiting=%d",
-        (int)log_calib_intrinsics, (int)log_calib_extrinsics, (int)log_calib_waiting);
+        "[LOG] log_calib_intrinsics=%d  log_calib_extrinsics=%d  log_calib_waiting=%d  publish_depth_cloud=%d  depth_postprocess=%d",
+        (int)log_calib_intrinsics, (int)log_calib_extrinsics, (int)log_calib_waiting,
+        (int)publish_depth_cloud, (int)depth_postprocess);
 
     std::string calib_file_path = node->declare_parameter<std::string>("calib_file_path", "");
 
@@ -226,6 +229,8 @@ int main(int argc, char **argv)
         params_override.push_back(rclcpp::Parameter("cam_0.k6", node->get_parameter("cam_0.k6").as_double()));
         params_override.push_back(rclcpp::Parameter("cam_0.k7", node->get_parameter("cam_0.k7").as_double()));
         params_override.push_back(rclcpp::Parameter("Tcl_0", node->get_parameter("Tcl_0").as_double_array()));
+        params_override.push_back(rclcpp::Parameter("publish_depth_cloud", publish_depth_cloud));
+        params_override.push_back(rclcpp::Parameter("depth_postprocess", depth_postprocess));
         
         depth_node_options.parameter_overrides(params_override);
         

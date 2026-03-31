@@ -21,7 +21,8 @@ limitations under the License.
 #include <vector>
 
 
-// 点云转深度图转换器：将稀疏 DTOF 点云投影为稠密深度图，并与 RGB 图像融合生成彩色点云
+// 点云转深度图转换器：将稀疏 DTOF 点云投影为稠密深度图，
+// 并在调用方需要时再额外生成彩色深度点云。
 class PointCloudToDepthConverter
 {
 public:
@@ -50,9 +51,11 @@ public:
     // 构造函数：初始化相机参数，预计算投影矩阵和畸变映射表
     explicit PointCloudToDepthConverter(const CameraParams &params);
 
-    // 主处理接口：将点云和 RGB 图像融合，输出深度图和彩色点云
+    // 主处理接口：将点云和 RGB 图像融合，输出深度图，并按需输出彩色点云
     ProcessResult processCloudAndImage(const pcl::PointCloud<pcl::PointXYZ> &cloud,
-                                       const cv::Mat &image);
+                                       const cv::Mat &image,
+                                       bool enable_post_processing,
+                                       bool generate_colored_cloud);
 
     // 深度图最近邻插值放大（保留有效深度值）
     cv::Mat customResize(const cv::Mat& src, const cv::Size& size);
@@ -86,6 +89,8 @@ private:
 
 
     cv::Mat postProcessDepthImage(const cv::Mat &depth_img);
+
+    cv::Mat upscaleDepthImage(const cv::Mat &depth_img);
 
 
     pcl::PointCloud<pcl::PointXYZRGB> generateColoredCloud(const cv::Mat &depth_img,

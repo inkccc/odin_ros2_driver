@@ -28,6 +28,7 @@ limitations under the License.
 #include <opencv2/opencv.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <thread>
+#include <condition_variable>
 #include <Eigen/Dense>
 #include <atomic>
 #include <unordered_map>
@@ -71,6 +72,21 @@ enum class OdometryType {
 extern int g_log_level;
 extern int g_sendcloudrender;
 extern int g_use_host_ros_time;
+extern int g_sendrgb;
+extern int g_sendrgb_compressed;
+extern int g_sendrgb_undistort;
+extern int g_sendimu;
+extern int g_senddtof;
+extern int g_sendodom;
+extern int g_sendodom_highfreq;
+extern int g_sendcloudslam;
+extern int g_record_data;
+extern int g_rgb_output_downscale_enable;
+extern int g_rgb_output_width;
+extern int g_rgb_output_height;
+extern int g_pub_intensity_gray;
+extern int g_show_path;
+extern int g_show_camerapose;
 double get_ptp_smoothed_delay();
 double get_ptp_smoothed_offset();
 #ifdef ROS2
@@ -230,6 +246,7 @@ public:
         MultiSensorPublisher(rclcpp::Node::SharedPtr node)
             : node_(node),cameraposevisual_ {1.0f, 0.0f, 0.0f, 1.0f} {
             initialize_publishers();
+            startBackgroundWorkers();
             // initialize_data_logger();
         }
     #else
@@ -237,9 +254,15 @@ public:
         MultiSensorPublisher(ros::NodeHandle& nh)
             : cameraposevisual_(1.0f, 0.0f, 0.0f, 1.0f) {
             initialize_publishers(nh);
+            startBackgroundWorkers();
             // initialize_data_logger();
         }
     #endif
+
+    // 析构时先停掉后台线程，避免线程仍持有 publisher / node 引用。
+    ~MultiSensorPublisher() {
+        stopBackgroundWorkers();
+    }
     
     // 获取数据记录根目录路径
     std::filesystem::path get_root_dir() const { return root_dir_; }
@@ -272,10 +295,30 @@ public:
     int get_wcwi_index() {
         return wcwi_index_.load();
     }
+
+    // 判断当前是否仍需要接收 RGB 原始帧。
+    // 这里既考虑配置开关，也考虑实际订阅者，避免“配置开了但没人用”时仍持续做 JPEG 解码。
+    bool shouldAcceptRgbFrames() const {
+        const bool needs_logging = static_cast<bool>(data_logger_);
+        return shouldPublishCompressedImage() ||
+               shouldDecodeRgbFrame() ||
+               needs_logging;
+    }
+
+    // cloud_render 只有在功能开启、存在订阅者且标定已初始化时才继续消耗主循环资源。
+    bool shouldRunCloudRender() const {
+        if (!g_sendcloudrender) {
+            return false;
+        }
+        return hasCloudRenderSubscribers();
+    }
  
     rawCloudRender render_;
     // 将IMU数据发布为ROS sensor_msgs/Imu消息，并可选记录到二进制日志
     void publishImu(imu_convert_data_t *stream) {
+        if (!publisherExists(imu_pub_)) {
+            return;
+        }
         #ifdef ROS2
             sensor_msgs::msg::Imu imu_msg;
         #else
@@ -344,76 +387,168 @@ public:
     using ImageConstPtr = sensor_msgs::ImageConstPtr;
     using PointCloud2ConstPtr = sensor_msgs::PointCloud2ConstPtr;
 #endif
+
+    // RGB 后台线程消费的数据单元。
+    // 这里只保存“回调离开之后仍然有效”的最小必要信息：
+    // 1. 时间戳
+    // 2. 原始 JPEG / YUV 字节流
+    // 3. 原始尺寸
+    struct RgbFrameTask {
+        uint64_t timestamp_ns = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        std::vector<uint8_t> payload;
+    };
+
+    // 统一判断 publisher 当前是否真的有人订阅，避免热路径里做无用计算。
+    template <typename PublisherT>
+    static bool publisherHasSubscribers(const PublisherT& pub) {
+        if (!pub) {
+            return false;
+        }
+        #ifdef ROS2
+            return pub->get_subscription_count() > 0;
+        #else
+            return pub.getNumSubscribers() > 0;
+        #endif
+    }
+
+    // “publisher 是否存在”与“publisher 是否有订阅者”是两个不同维度。
+    // 本 helper 只用于保证配置关闭时未创建 publisher 的场景下，不会发生空对象 publish。
+    template <typename PublisherT>
+    static bool publisherExists(const PublisherT& pub) {
+        return static_cast<bool>(pub);
+    }
+
+    bool shouldPublishCompressedImage() const {
+        return g_sendrgb_compressed && publisherHasSubscribers(compressed_rgb_pub_);
+    }
+
+    bool shouldPublishRawImage() const {
+        return g_sendrgb && publisherHasSubscribers(rgb_pub_);
+    }
+
+    bool shouldPublishUndistortedImage() const {
+        return g_sendrgb_undistort &&
+               m_undistort_map_init_success &&
+               publisherHasSubscribers(undistort_rgb_pub_);
+    }
+
+    bool hasCloudRenderSubscribers() const {
+        return publisherHasSubscribers(rgbcloud_pub_);
+    }
+
+    // 只有在以下几种情况才值得为当前帧做 JPEG 解码：
+    // 1. 需要发布 raw image
+    // 2. 需要发布 undistorted image
+    // 3. 需要给 cloud_render 提供 BGR 图像
+    bool shouldDecodeRgbFrame() const {
+        return shouldPublishRawImage() ||
+               shouldPublishUndistortedImage() ||
+               shouldRunCloudRender();
+    }
+
+    // 显式分辨率降级开关。默认关闭，确保下游依赖旧分辨率时不受影响。
+    bool shouldDownscaleRgbOutput(int src_width, int src_height) const {
+        if (!g_rgb_output_downscale_enable) {
+            return false;
+        }
+        if (g_rgb_output_width <= 0 || g_rgb_output_height <= 0) {
+            return false;
+        }
+        if (g_rgb_output_width == src_width && g_rgb_output_height == src_height) {
+            return false;
+        }
+        if (g_rgb_output_width > src_width || g_rgb_output_height > src_height) {
+            return false;
+        }
+        return true;
+    }
+
+    cv::Size getRgbOutputSize(int src_width, int src_height) const {
+        if (!shouldDownscaleRgbOutput(src_width, src_height)) {
+            return cv::Size(src_width, src_height);
+        }
+        return cv::Size(g_rgb_output_width, g_rgb_output_height);
+    }
+
+    // 设备回调线程只做入队，不做 JPEG 解码 / 去畸变 / ROS 发布。
+    void enqueueRgbTask(RgbFrameTask task) {
+        {
+            std::lock_guard<std::mutex> lock(rgb_worker_mutex_);
+            rgb_task_queue_.clear();
+            rgb_task_queue_.push_back(std::move(task));
+        }
+        rgb_worker_cv_.notify_one();
+    }
+
+    // 后台线程循环处理最新 RGB 帧。
+    // latest-only 策略可以避免处理不过来时队列越积越长。
+    void rgbWorkerLoop() {
+        while (true) {
+            RgbFrameTask task;
+            {
+                std::unique_lock<std::mutex> lock(rgb_worker_mutex_);
+                rgb_worker_cv_.wait(lock, [&]() {
+                    return stop_background_workers_ || !rgb_task_queue_.empty();
+                });
+                if (stop_background_workers_) {
+                    return;
+                }
+                task = std::move(rgb_task_queue_.back());
+                rgb_task_queue_.clear();
+            }
+            processRgbTask(task);
+        }
+    }
+
+    void startBackgroundWorkers() {
+        stop_background_workers_ = false;
+        rgb_worker_thread_ = std::thread(&MultiSensorPublisher::rgbWorkerLoop, this);
+    }
+
+    void stopBackgroundWorkers() {
+        {
+            std::lock_guard<std::mutex> lock(rgb_worker_mutex_);
+            stop_background_workers_ = true;
+            rgb_task_queue_.clear();
+        }
+        rgb_worker_cv_.notify_all();
+        if (rgb_worker_thread_.joinable()) {
+            rgb_worker_thread_.join();
+        }
+    }
 // 尝试从RGB图像队列和点云队列中匹配时间戳相近的数据对并进行彩色点云渲染处理
 void try_process_pair() {
-    // Record queue status
-    size_t rgb_size, pcd_size;
+    ImageConstPtr rgb_msg = nullptr;
+    PointCloud2ConstPtr pcd_msg = nullptr;
+
     {
         std::lock_guard<std::mutex> lock1(rgb_queue_mutex_);
         std::lock_guard<std::mutex> lock2(pcd_queue_mutex_);
-        rgb_size = rgb_image_queue_.size();
-        pcd_size = pcd_queue_.size();
+        if (!rgb_image_queue_.empty() && !pcd_queue_.empty()) {
+            rgb_msg = rgb_image_queue_.back();
+            pcd_msg = pcd_queue_.back();
+            rgb_image_queue_.clear();
+            pcd_queue_.clear();
+        }
     }
-    
-    while (true) {
-        ImageConstPtr rgb_msg = nullptr;
-        PointCloud2ConstPtr pcd_msg = nullptr;
-        
-        // Get a pair of data from queues (with lock protection)
-        {
-            std::lock_guard<std::mutex> lock1(rgb_queue_mutex_);
-            std::lock_guard<std::mutex> lock2(pcd_queue_mutex_);
-            
-            if (!rgb_image_queue_.empty() && !pcd_queue_.empty()) {
-                rgb_msg = rgb_image_queue_.front();
-                pcd_msg = pcd_queue_.front();
-            }
-        }
-        
-        if (!rgb_msg || !pcd_msg) {
-            break;
-        }
-        
-        // timestamp
-        uint64_t rgb_stamp = ros_time_to_ns(rgb_msg->header.stamp);
-        uint64_t pcd_stamp = ros_time_to_ns(pcd_msg->header.stamp);
-        int64_t time_diff = static_cast<int64_t>(rgb_stamp) - static_cast<int64_t>(pcd_stamp);
-        int64_t abs_time_diff = std::abs(time_diff);
-        
-        // Check if time difference is within allowed range (50ms)
-        const int64_t MAX_TIME_DIFF = 50000000; // 50ms in nanoseconds
-        if (abs_time_diff > MAX_TIME_DIFF) {
-            // Remove older timestamped message
-            {
-                std::lock_guard<std::mutex> lock1(rgb_queue_mutex_);
-                std::lock_guard<std::mutex> lock2(pcd_queue_mutex_);
-                
-                if (time_diff > 0) {
-                    // RGB timestamp is newer, remove PCD
-                    pcd_queue_.pop_front();
-                } else {
-                    // PCD timestamp is newer, remove RGB
-                    rgb_image_queue_.pop_front();
-                }
-            }
-            
-            // Try next pair
-            continue;
-        }
-        
-        // Time difference within allowed range, process data pair
-        {
-            std::lock_guard<std::mutex> lock1(rgb_queue_mutex_);
-            std::lock_guard<std::mutex> lock2(pcd_queue_mutex_);
-            
-            // Remove messages from queues
-            rgb_image_queue_.pop_front();
-            pcd_queue_.pop_front();
-        }
-        
-        // Process data pair
-        process_pair(rgb_msg, pcd_msg);
+
+    if (!rgb_msg || !pcd_msg) {
+        return;
     }
+
+    const uint64_t rgb_stamp = ros_time_to_ns(rgb_msg->header.stamp);
+    const uint64_t pcd_stamp = ros_time_to_ns(pcd_msg->header.stamp);
+    const int64_t abs_time_diff = std::abs(static_cast<int64_t>(rgb_stamp) - static_cast<int64_t>(pcd_stamp));
+
+    // latest-only 模式下不再追赶旧帧，时间差过大的组合直接丢弃等待下一组。
+    const int64_t MAX_TIME_DIFF = 50000000; // 50ms in nanoseconds
+    if (abs_time_diff > MAX_TIME_DIFF) {
+        return;
+    }
+
+    process_pair(rgb_msg, pcd_msg);
 }
 // 校验彩色点云渲染所需的RGB图像、点云流指针及索引等参数的合法性
 bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image,
@@ -479,6 +614,10 @@ bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image,
 // 处理一对时间对齐的RGB图像和点云数据，渲染后发布彩色点云消息
 void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_msg)
 {
+    if (!publisherExists(rgbcloud_pub_)) {
+        return;
+    }
+
     auto start_time = std::chrono::steady_clock::now();
 
     const int input_image_width = rgb_msg->width;
@@ -583,6 +722,10 @@ void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_m
 // 将DTOF原始点云（含强度和置信度字段）发布为PointCloud2消息
 void publishIntensityCloud(capture_Image_List_t* stream, int idx)
 {
+    if (!publisherExists(cloud_pub_)) {
+        return;
+    }
+
     // Check index validity
     if (idx < 0 || idx >= 10) {
         #ifndef ROS2
@@ -709,10 +852,11 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
         }
     }
 
-    // Only cache point cloud if cloud_render is enabled
-    if (g_sendcloudrender) {
+    // cloud_render 改为 latest-only：
+    // 只缓存最新一帧点云，避免处理跟不上时队列越积越长。
+    if (shouldRunCloudRender()) {
         std::lock_guard<std::mutex> lock(pcd_queue_mutex_);
-        
+
         // Create deep copy of point cloud
         #ifdef ROS2
             auto msg_copy = std::make_shared<sensor_msgs::msg::PointCloud2>(*msg);
@@ -720,13 +864,8 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
             auto msg_copy = boost::make_shared<sensor_msgs::PointCloud2>();
             *msg_copy = *msg;  // Deep copy
         #endif
-        
-        // Queue management
-        if (pcd_queue_.size() >= 10) {
-            pcd_queue_.pop_front();
-        }
-        
-        // Add to queue (using copy)
+
+        pcd_queue_.clear();
         pcd_queue_.push_back(msg_copy);
     }
 
@@ -740,6 +879,10 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
 
 // 将DTOF灰度强度图像发布为mono8格式的ROS Image消息
 void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
+    if (!publisherExists(intensity_gray_pub_)) {
+        return;
+    }
+
     ImageMsg msg;
     #ifdef ROS2
         msg.header.stamp = make_aligned_stamp(stream->imageList[idx].timestamp, node_);
@@ -774,114 +917,155 @@ void publishGrayUInt8(capture_Image_List_t *stream, int idx) {
     #endif
 }
 
-// 解码JPEG格式的RGB图像并发布原始图、去畸变图和压缩图消息，可选记录到日志
-void publishRgb(capture_Image_List_t *stream) {
-    buffer_List_t &image = stream->imageList[0];
+// 后台执行真正的 RGB 处理逻辑。
+// 设计目标：
+// 1. 只处理当前配置和订阅者真正需要的分支
+// 2. 解码最多做一次
+// 3. 去畸变只在 undistorted 确实要发布时才执行
+void processRgbTask(const RgbFrameTask& task) {
+    if (task.payload.empty()) {
+        return;
+    }
 
-    // old version yuv data
-    if (image.length == image.width * image.height * 3 / 2) {
+    const bool legacy_yuv = (task.payload.size() == static_cast<size_t>(task.width) * task.height * 3 / 2);
+    if (legacy_yuv) {
         #ifdef ROS2
             RCLCPP_INFO(rclcpp::get_logger("publishRgb"), "old format rgb data, please upgrade device firmware");
         #else
             ROS_INFO("old format rgb data, please upgrade device firmware");
         #endif
-    } else {// new version jpeg data
+        return;
+    }
 
-        std::vector<uint8_t> jpeg_data(static_cast<uint8_t*>(image.pAddr),
-                                        static_cast<uint8_t*>(image.pAddr) + image.length);
+    const bool publish_compressed = shouldPublishCompressedImage();
+    const bool decode_image = shouldDecodeRgbFrame();
 
-        // convert back to bgr8                                                
-        cv::Mat decoded_image = cv::imdecode(jpeg_data, cv::IMREAD_COLOR);
+    if (!publish_compressed && !decode_image && !data_logger_) {
+        return;
+    }
 
-        cv_bridge::CvImage cv_image;
+    // 录制逻辑仍保留原始 JPEG，避免因显示分辨率调整影响记录数据。
+    if (data_logger_) {
+        const uint32_t idx_now = image_index_.fetch_add(1, std::memory_order_relaxed);
+        const double ts_sec = static_cast<double>(task.timestamp_ns) / 1e9;
+        const uint32_t jpeg_size = static_cast<uint32_t>(task.payload.size());
+        std::vector<uint8_t> blob;
+        blob.reserve(sizeof(uint32_t) + sizeof(double) + sizeof(uint32_t) + jpeg_size);
+        auto append_pod = [&](const auto& v) {
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
+            blob.insert(blob.end(), p, p + sizeof(v));
+        };
+        append_pod(idx_now);
+        append_pod(ts_sec);
+        append_pod(jpeg_size);
+        blob.insert(blob.end(), task.payload.begin(), task.payload.end());
+        data_logger_->enqueueImageFrame(std::move(blob));
+    }
+
+    if (publish_compressed) {
         #ifdef ROS2
-            cv_image.header.stamp = make_aligned_stamp(stream->imageList[0].timestamp, node_);
-        #else
-            cv_image.header.stamp = make_aligned_stamp(stream->imageList[0].timestamp);
-        #endif
-        cv_image.encoding = "bgr8";
-        cv_image.image = decoded_image;
-
-        if (g_sendcloudrender) {
-            std::lock_guard<std::mutex> lock(rgb_queue_mutex_);
-            if (rgb_image_queue_.size() >= 10) {
-                rgb_image_queue_.pop_front();
-            }
-            rgb_image_queue_.push_back(cv_image.toImageMsg());
-            }        
-
-        // Enqueue binary logging for image
-        if (data_logger_) {
-            const uint32_t idx_now = image_index_.fetch_add(1, std::memory_order_relaxed);
-            const double ts_sec = static_cast<double>(stream->imageList[0].timestamp) / 1e9;
-            const uint32_t jpeg_size = static_cast<uint32_t>(jpeg_data.size());
-            std::vector<uint8_t> blob;
-            blob.reserve(sizeof(uint32_t) + sizeof(double) + sizeof(uint32_t) + jpeg_size);
-            auto append_pod = [&](const auto& v) {
-                const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
-                blob.insert(blob.end(), p, p + sizeof(v));
-            };
-            append_pod(idx_now);
-            append_pod(ts_sec);
-            append_pod(jpeg_size);
-            blob.insert(blob.end(), jpeg_data.begin(), jpeg_data.end());
-            data_logger_->enqueueImageFrame(std::move(blob));
-        }
-
-        // undistort image
-        cv::Mat undistorted_image = cv::Mat::zeros(decoded_image.size(), decoded_image.type());
-        cv_bridge::CvImage cv_undistorted_image;
-
-        if (m_undistort_map_init_success) {
-            cv::remap(decoded_image, undistorted_image, m_undistort_map_x, m_undistort_map_y, cv::INTER_LINEAR);
-            #ifdef ROS2
-                cv_undistorted_image.header.stamp = make_aligned_stamp(stream->imageList[0].timestamp, node_);
-            #else
-                cv_undistorted_image.header.stamp = make_aligned_stamp(stream->imageList[0].timestamp);
-            #endif
-            cv_undistorted_image.encoding = "bgr8";
-            cv_undistorted_image.image = undistorted_image;
-        }
-
-        #ifdef ROS2
-        {
-            rgb_pub_->publish(*cv_image.toImageMsg());
-            if (m_undistort_map_init_success) {
-                undistort_rgb_pub_->publish(*cv_undistorted_image.toImageMsg());
-            }
-
-            // original jpeg - always publish as it's small
             sensor_msgs::msg::CompressedImage jpeg_msg;
-            jpeg_msg.header.stamp = make_aligned_stamp(stream->imageList[0].timestamp, node_);
+            jpeg_msg.header.stamp = make_aligned_stamp(task.timestamp_ns, node_);
             jpeg_msg.format = "jpeg";
-            jpeg_msg.data = jpeg_data;
-
+            jpeg_msg.data = task.payload;
             compressed_rgb_pub_->publish(jpeg_msg);
-        }
         #else
-        {
-            rgb_pub_.publish(cv_image.toImageMsg());
-            if (m_undistort_map_init_success) {
-                undistort_rgb_pub_.publish(cv_undistorted_image.toImageMsg());
-            }
-
-            // original jpeg
             sensor_msgs::CompressedImagePtr jpeg_msg(new sensor_msgs::CompressedImage());
-            jpeg_msg->header.stamp = make_aligned_stamp(stream->imageList[0].timestamp);
+            jpeg_msg->header.stamp = make_aligned_stamp(task.timestamp_ns);
             jpeg_msg->format = "jpeg";
-            jpeg_msg->data = jpeg_data;
-
+            jpeg_msg->data = task.payload;
             compressed_rgb_pub_.publish(jpeg_msg);
-        }
         #endif
     }
 
+    if (!decode_image) {
+        return;
+    }
+
+    cv::Mat decoded_image = cv::imdecode(task.payload, cv::IMREAD_COLOR);
+    if (decoded_image.empty()) {
+        #ifdef ROS2
+            RCLCPP_WARN(rclcpp::get_logger("publishRgb"), "Failed to decode JPEG RGB image");
+        #else
+            ROS_WARN("Failed to decode JPEG RGB image");
+        #endif
+        return;
+    }
+
+    cv_bridge::CvImage full_res_cv_image;
+    #ifdef ROS2
+        full_res_cv_image.header.stamp = make_aligned_stamp(task.timestamp_ns, node_);
+    #else
+        full_res_cv_image.header.stamp = make_aligned_stamp(task.timestamp_ns);
+    #endif
+    full_res_cv_image.encoding = "bgr8";
+    full_res_cv_image.image = decoded_image;
+
+    // cloud_render 必须拿到未降采样的原始图像，保证其仍与标定和点云投影模型一致。
+    if (shouldRunCloudRender()) {
+        std::lock_guard<std::mutex> lock(rgb_queue_mutex_);
+        rgb_image_queue_.clear();
+        rgb_image_queue_.push_back(full_res_cv_image.toImageMsg());
+    }
+
+    const cv::Size publish_size = getRgbOutputSize(decoded_image.cols, decoded_image.rows);
+    const bool publish_raw = shouldPublishRawImage();
+    const bool publish_undistorted = shouldPublishUndistortedImage();
+
+    if (publish_raw) {
+        cv_bridge::CvImage raw_publish_image = full_res_cv_image;
+        if (publish_size != decoded_image.size()) {
+            // 降采样发生在发布前，尽量减少 DDS 传输和下游显示负担。
+            cv::resize(decoded_image, raw_publish_image.image, publish_size, 0.0, 0.0, cv::INTER_AREA);
+        }
+        #ifdef ROS2
+            rgb_pub_->publish(*raw_publish_image.toImageMsg());
+        #else
+            rgb_pub_.publish(raw_publish_image.toImageMsg());
+        #endif
+    }
+
+    if (publish_undistorted) {
+        cv::Mat undistorted_image;
+        cv::remap(decoded_image, undistorted_image, m_undistort_map_x, m_undistort_map_y, cv::INTER_LINEAR);
+
+        cv_bridge::CvImage undistorted_publish_image;
+        undistorted_publish_image.header = full_res_cv_image.header;
+        undistorted_publish_image.encoding = "bgr8";
+        undistorted_publish_image.image = undistorted_image;
+        if (publish_size != undistorted_image.size()) {
+            // 去畸变先按原始分辨率完成，再缩放输出，避免直接在降采样图上使用错误内参。
+            cv::resize(undistorted_image, undistorted_publish_image.image, publish_size, 0.0, 0.0, cv::INTER_AREA);
+        }
+
+        #ifdef ROS2
+            undistort_rgb_pub_->publish(*undistorted_publish_image.toImageMsg());
+        #else
+            undistort_rgb_pub_.publish(undistorted_publish_image.toImageMsg());
+        #endif
+    }
+}
+
+// 设备回调线程入口：只复制当前帧并交给后台线程，避免在 SDK 回调上下文里做重计算。
+void publishRgb(capture_Image_List_t *stream) {
+    buffer_List_t &image = stream->imageList[0];
+    RgbFrameTask task;
+    task.timestamp_ns = image.timestamp;
+    task.width = static_cast<uint32_t>(image.width);
+    task.height = static_cast<uint32_t>(image.height);
+    task.payload.assign(static_cast<uint8_t*>(image.pAddr),
+                        static_cast<uint8_t*>(image.pAddr) + image.length);
+    enqueueRgbTask(std::move(task));
 }
 
 
     // 将SLAM彩色点云（XYZRGBA格式）发布为PointCloud2消息，可选记录到日志
     void publishPC2XYZRGBA(capture_Image_List_t* stream, int idx)
     {
+        if (!publisherExists(xyzrgbacloud_pub_)) {
+            return;
+        }
+
         #ifdef ROS2
                 sensor_msgs::msg::PointCloud2 msg;
                 msg.header.frame_id = "odom";
@@ -1232,13 +1416,15 @@ void publishRgb(capture_Image_List_t *stream) {
                         transformStamped.transform.rotation.w = msg.pose.pose.orientation.w;
                         tf_broadcaster->sendTransform(transformStamped);
                     }
-                    odom_publisher_->publish(msg);
+                    if (publisherExists(odom_publisher_)) {
+                        odom_publisher_->publish(msg);
+                    }
 
                     // Publish odom trajectory as visualization markers (green lines connecting adjacent points)
                     static visualization_msgs::msg::Marker marker;
                     static std::vector<geometry_msgs::msg::Point> path_points;
                     
-                    if (show_path) {
+                    if (show_path && publisherExists(path_publisher_)) {
                         marker.header = msg.header;
                         marker.ns = "odom_trajectory";
                         marker.id = 0;
@@ -1271,7 +1457,7 @@ void publishRgb(capture_Image_List_t *stream) {
                         path_publisher_->publish(marker_array);
                     }
 
-                    if (show_camerapose) {
+                    if (show_camerapose && publisherExists(pub_camera_pose_visual_)) {
                         // camera pose visualization (ROS2)
                         Eigen::Vector3d P(msg.pose.pose.position.x,
                                         msg.pose.pose.position.y,
@@ -1291,7 +1477,9 @@ void publishRgb(capture_Image_List_t *stream) {
                     }
                     break;
                 case OdometryType::HIGHFREQ:
-                    odom_highfreq_publisher_->publish(std::move(msg));
+                    if (publisherExists(odom_highfreq_publisher_)) {
+                        odom_highfreq_publisher_->publish(std::move(msg));
+                    }
                     break;
                 case OdometryType::TRANSFORM:
                     {
@@ -1328,9 +1516,11 @@ void publishRgb(capture_Image_List_t *stream) {
                         transformStamped.transform.rotation.w = msg.pose.pose.orientation.w;
                         tf_broadcaster->sendTransform(transformStamped);
                     }
-                    odom_publisher_.publish(msg);
+                    if (publisherExists(odom_publisher_)) {
+                        odom_publisher_.publish(msg);
+                    }
 
-                    if (show_path) {
+                    if (show_path && publisherExists(path_publisher_)) {
                         // Publish odom trajectory as visualization markers (green lines connecting adjacent points)
                         static visualization_msgs::Marker marker;
                         static std::vector<geometry_msgs::Point> path_points;
@@ -1367,7 +1557,7 @@ void publishRgb(capture_Image_List_t *stream) {
                         path_publisher_.publish(marker_array);
                     }
 
-                    if (show_camerapose) {
+                    if (show_camerapose && publisherExists(pub_camera_pose_visual_)) {
                         // camera pose visualization (ROS1)
                         Eigen::Vector3d P(msg.pose.pose.position.x,
                                         msg.pose.pose.position.y,
@@ -1388,7 +1578,9 @@ void publishRgb(capture_Image_List_t *stream) {
                     }
                     break;
                 case OdometryType::HIGHFREQ:
-                    odom_highfreq_publisher_.publish(msg);
+                    if (publisherExists(odom_highfreq_publisher_)) {
+                        odom_highfreq_publisher_.publish(msg);
+                    }
                     break;
                 case OdometryType::TRANSFORM:
                     {
@@ -1556,7 +1748,7 @@ void publishRgb(capture_Image_List_t *stream) {
     }
 
 private:
-    // Add the following member variables
+    // cloud_render 配对缓存。这里只保留最新一帧，减少回放式积压。
     std::mutex rgb_queue_mutex_;
     std::deque<ImageConstPtr> rgb_image_queue_;
     const size_t max_rgb_queue_size_ = 10; // Cache up to 10 image frames
@@ -1564,6 +1756,15 @@ private:
     std::mutex pcd_queue_mutex_;
     std::deque<PointCloud2ConstPtr> pcd_queue_;
     const size_t max_pcd_queue_size_ = 10; // Maximum cache frames
+
+    // RGB 后台处理线程：
+    // 设备回调只负责把最新原始 JPEG 放进这个队列；
+    // 后台线程拿到最新帧后再决定是否解码 / 去畸变 / 发布。
+    std::mutex rgb_worker_mutex_;
+    std::condition_variable rgb_worker_cv_;
+    std::deque<RgbFrameTask> rgb_task_queue_;
+    std::thread rgb_worker_thread_;
+    bool stop_background_workers_ = false;
 
     // Binary logger and frame indices
     std::shared_ptr<BinaryDataLogger> data_logger_;
@@ -1657,36 +1858,88 @@ private:
                                     .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
                                     .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
 
-            imu_pub_ = node_->create_publisher<ros::Imu>("odin1/imu", qos_small);
-            rgb_pub_ = node_->create_publisher<ros::Image>("odin1/image", qos_sensor);
-            cloud_pub_ = node_->create_publisher<ros::PointCloud2>("odin1/cloud_raw", qos_sensor);
-            xyzrgbacloud_pub_ = node_->create_publisher<ros::PointCloud2>("odin1/cloud_slam", qos_sensor);
-            odom_publisher_ = node_->create_publisher<ros::Odometry>("odin1/odometry", qos_small);
-            odom_highfreq_publisher_ = node_->create_publisher<ros::Odometry>("odin1/odometry_highfreq", qos_small);
-            path_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>("odin1/path", qos_sensor);
-            pub_camera_pose_visual_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>("odin1/camera_pose_visual", qos_sensor);
-            rgbcloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_render", qos_sensor);
-            compressed_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", qos_small);
-            undistort_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/undistorted", qos_sensor);
-            intensity_gray_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/intensity_gray", qos_sensor);
+            // 这里故意只为启动配置中“已启用”的功能创建 publisher。
+            // 这样 ros2 topic list 不会再出现被关闭的伪活跃话题，
+            // 同时热路径中的 publish/订阅者检查也能天然绕开这些分支。
+            // 当前策略把“发布拓扑”固定在启动阶段，避免运行期动态增删 publisher 给主链路带来复杂性。
+            if (g_sendimu) {
+                imu_pub_ = node_->create_publisher<ros::Imu>("odin1/imu", qos_small);
+            }
+            if (g_sendrgb) {
+                rgb_pub_ = node_->create_publisher<ros::Image>("odin1/image", qos_sensor);
+            }
+            if (g_senddtof) {
+                cloud_pub_ = node_->create_publisher<ros::PointCloud2>("odin1/cloud_raw", qos_sensor);
+            }
+            if (g_sendcloudslam) {
+                xyzrgbacloud_pub_ = node_->create_publisher<ros::PointCloud2>("odin1/cloud_slam", qos_sensor);
+            }
+            if (g_sendodom) {
+                odom_publisher_ = node_->create_publisher<ros::Odometry>("odin1/odometry", qos_small);
+            }
+            if (g_sendodom_highfreq) {
+                odom_highfreq_publisher_ = node_->create_publisher<ros::Odometry>("odin1/odometry_highfreq", qos_small);
+            }
+            if (g_show_path) {
+                path_publisher_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>("odin1/path", qos_sensor);
+            }
+            if (g_show_camerapose) {
+                pub_camera_pose_visual_ = node_->create_publisher<visualization_msgs::msg::MarkerArray>("odin1/camera_pose_visual", qos_sensor);
+            }
+            if (g_sendcloudrender) {
+                rgbcloud_pub_ = node_->create_publisher<sensor_msgs::msg::PointCloud2>("odin1/cloud_render", qos_sensor);
+            }
+            if (g_sendrgb_compressed) {
+                compressed_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::CompressedImage>("odin1/image/compressed", qos_small);
+            }
+            if (g_sendrgb_undistort) {
+                undistort_rgb_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/undistorted", qos_sensor);
+            }
+            if (g_pub_intensity_gray) {
+                intensity_gray_pub_ = node_->create_publisher<sensor_msgs::msg::Image>("odin1/image/intensity_gray", qos_sensor);
+            }
             tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(node_);
         #endif
     }
     #ifdef ROS1
         // 初始化所有ROS1话题发布者（ROS1专用）
         void initialize_publishers(ros::NodeHandle& nh) {
-            imu_pub_ = nh.advertise<ros::Imu>("odin1/imu", 4000);
-            rgb_pub_ = nh.advertise<ros::Image>("odin1/image", 100);
-            cloud_pub_ = nh.advertise<ros::PointCloud2>("odin1/cloud_raw", 100);
-            xyzrgbacloud_pub_ = nh.advertise<ros::PointCloud2>("odin1/cloud_slam", 100);
-            odom_publisher_ = nh.advertise<ros::Odometry>("odin1/odometry", 100);
-            odom_highfreq_publisher_ = nh.advertise<ros::Odometry>("odin1/odometry_highfreq", 4000);
-            path_publisher_ = nh.advertise<visualization_msgs::MarkerArray>("odin1/path", 100);
-            pub_camera_pose_visual_ = nh.advertise<visualization_msgs::MarkerArray>("odin1/camera_pose_visual", 100);
-            rgbcloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("odin1/cloud_render", 100);
-            compressed_rgb_pub_ = nh.advertise<sensor_msgs::CompressedImage>("odin1/image/compressed", 100);
-            undistort_rgb_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/undistorted", 100);
-            intensity_gray_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/intensity_gray", 100);
+            if (g_sendimu) {
+                imu_pub_ = nh.advertise<ros::Imu>("odin1/imu", 4000);
+            }
+            if (g_sendrgb) {
+                rgb_pub_ = nh.advertise<ros::Image>("odin1/image", 100);
+            }
+            if (g_senddtof) {
+                cloud_pub_ = nh.advertise<ros::PointCloud2>("odin1/cloud_raw", 100);
+            }
+            if (g_sendcloudslam) {
+                xyzrgbacloud_pub_ = nh.advertise<ros::PointCloud2>("odin1/cloud_slam", 100);
+            }
+            if (g_sendodom) {
+                odom_publisher_ = nh.advertise<ros::Odometry>("odin1/odometry", 100);
+            }
+            if (g_sendodom_highfreq) {
+                odom_highfreq_publisher_ = nh.advertise<ros::Odometry>("odin1/odometry_highfreq", 4000);
+            }
+            if (g_show_path) {
+                path_publisher_ = nh.advertise<visualization_msgs::MarkerArray>("odin1/path", 100);
+            }
+            if (g_show_camerapose) {
+                pub_camera_pose_visual_ = nh.advertise<visualization_msgs::MarkerArray>("odin1/camera_pose_visual", 100);
+            }
+            if (g_sendcloudrender) {
+                rgbcloud_pub_ = nh.advertise<sensor_msgs::PointCloud2>("odin1/cloud_render", 100);
+            }
+            if (g_sendrgb_compressed) {
+                compressed_rgb_pub_ = nh.advertise<sensor_msgs::CompressedImage>("odin1/image/compressed", 100);
+            }
+            if (g_sendrgb_undistort) {
+                undistort_rgb_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/undistorted", 100);
+            }
+            if (g_pub_intensity_gray) {
+                intensity_gray_pub_ = nh.advertise<sensor_msgs::Image>("odin1/image/intensity_gray", 100);
+            }
             tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>();
         }
     #endif

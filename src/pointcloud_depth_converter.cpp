@@ -91,7 +91,9 @@ void PointCloudToDepthConverter::createDistortionMaps()
 // 主处理函数：将输入点云投影到相机坐标系生成深度图，并与 RGB 图像融合输出彩色点云
 PointCloudToDepthConverter::ProcessResult PointCloudToDepthConverter::processCloudAndImage(
     const pcl::PointCloud<pcl::PointXYZ> &cloud,
-    const cv::Mat &image)
+    const cv::Mat &image,
+    bool enable_post_processing,
+    bool generate_colored_cloud)
 {
     ProcessResult result;
     result.success = false;
@@ -110,9 +112,16 @@ PointCloudToDepthConverter::ProcessResult PointCloudToDepthConverter::processClo
 
         cv::Mat depth_img = projectCloudToDepth(cloud_in_cam);
 
-        cv::Mat processed_depth = postProcessDepthImage(depth_img);
+        // 为兼容历史下游，哪怕关闭深度后处理，也仍然先恢复到原始图像分辨率，
+        // 这样发布的话题格式和尺寸保持稳定，只是去掉 Sobel/阈值去噪阶段。
+        cv::Mat processed_depth = enable_post_processing
+            ? postProcessDepthImage(depth_img)
+            : upscaleDepthImage(depth_img);
 
-        pcl::PointCloud<pcl::PointXYZRGB> colored_cloud = generateColoredCloud(processed_depth, image);
+        pcl::PointCloud<pcl::PointXYZRGB> colored_cloud;
+        if (generate_colored_cloud) {
+            colored_cloud = generateColoredCloud(processed_depth, image);
+        }
 
         result.depth_image = processed_depth;
         result.colored_cloud = colored_cloud;
@@ -164,8 +173,7 @@ cv::Mat PointCloudToDepthConverter::projectCloudToDepth(const pcl::PointCloud<pc
     return depth_img;
 }
 
-// 对深度图进行后处理：上采样到原始分辨率，并用 Sobel 梯度阈值去除边缘噪声
-cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_img) {
+cv::Mat PointCloudToDepthConverter::upscaleDepthImage(const cv::Mat &depth_img) {
     if (depth_img.empty()) {
         std::cerr << "ERROR: Input depth image is empty!" << std::endl;
         return cv::Mat();
@@ -190,7 +198,7 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
 
     cv::Mat depth_img_upsampled;
     try {
-        depth_img_upsampled = customResize(depth_img, cv::Size(1600, 1296));
+        depth_img_upsampled = customResize(depth_img, cv::Size(params_.image_width, params_.image_height));
     } catch (const std::exception& e) {
         std::cerr << "ERROR: Custom resize failed: " << e.what() << std::endl;
         return cv::Mat();
@@ -201,13 +209,22 @@ cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_i
         return cv::Mat();
     }
     
-    if (depth_img_upsampled.rows != 1296 || depth_img_upsampled.cols != 1600) {
+    if (depth_img_upsampled.rows != params_.image_height || depth_img_upsampled.cols != params_.image_width) {
         std::cerr << "ERROR: Resized image has wrong dimensions: " 
                   << depth_img_upsampled.cols << "x" << depth_img_upsampled.rows
-                  << " (expected " << 1600 << "x" << 1296 << ")" << std::endl;
+                  << " (expected " << params_.image_width << "x" << params_.image_height << ")" << std::endl;
         return cv::Mat();
     }
-    
+
+    return depth_img_upsampled;
+}
+
+// 对深度图进行后处理：先恢复到原始分辨率，再用 Sobel 梯度阈值去除边缘噪声
+cv::Mat PointCloudToDepthConverter::postProcessDepthImage(const cv::Mat &depth_img) {
+    cv::Mat depth_img_upsampled = upscaleDepthImage(depth_img);
+    if (depth_img_upsampled.empty()) {
+        return cv::Mat();
+    }
 
     cv::Mat grad_x, grad_y, grad_magnitude;
     try {
@@ -278,20 +295,19 @@ cv::Mat PointCloudToDepthConverter::customResize(const cv::Mat& src, const cv::S
 pcl::PointCloud<pcl::PointXYZRGB> PointCloudToDepthConverter::generateColoredCloud(
     const cv::Mat &depth_img, const cv::Mat &color_img)
 {
-    cv::Mat depth_undistorted, color_undistorted;
-    depth_undistorted = depth_img.clone();
+    cv::Mat color_undistorted;
     cv::remap(color_img, color_undistorted, inv_map_x_, inv_map_y_, cv::INTER_LINEAR);
 
     pcl::PointCloud<pcl::PointXYZRGB> cloud_colored;
     cloud_colored.points.reserve(
-        static_cast<size_t>(depth_undistorted.rows / params_.point_sampling_rate)
-        * (depth_undistorted.cols / params_.point_sampling_rate));
+        static_cast<size_t>(depth_img.rows / params_.point_sampling_rate)
+        * (depth_img.cols / params_.point_sampling_rate));
 
-    for (int v = 0; v < depth_undistorted.rows; v += params_.point_sampling_rate)
+    for (int v = 0; v < depth_img.rows; v += params_.point_sampling_rate)
     {
-        for (int u = 0; u < depth_undistorted.cols; u += params_.point_sampling_rate)
+        for (int u = 0; u < depth_img.cols; u += params_.point_sampling_rate)
         {
-            float depth = depth_undistorted.at<float>(v, u);
+            float depth = depth_img.at<float>(v, u);
             if (depth > 0.1f && depth < 100.0f) 
             {
                 double y_cam = (v - params_.v0) * depth / params_.A22;

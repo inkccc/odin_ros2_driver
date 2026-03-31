@@ -13,7 +13,7 @@ register_keys:
   # 0: 使用设备内部时间（推荐，时间戳最准确）
   # 1: 使用主机 ROS 时间（接收时打时间戳，不推荐，会引入网络延迟误差）
   # 2: 将设备时间对齐到主机时间轴（类 PTP 同步，时间戳为主机时间轴上的接收时刻）
-  use_host_ros_time: 0
+  use_host_ros_time: 1
 
   # ===== 数据流总开关 =====
   # 0: 停止所有数据流
@@ -25,23 +25,42 @@ register_keys:
   # ===== RGB 图像（压缩格式） =====
   # 发布原始 JPEG 压缩图像，直接来自设备，带宽消耗最低
   # 话题: /odin1/image/compressed
+  # 与 sendrgb / sendrgbundistort 已解耦：
+  # 可单独开启 compressed，而不必同时发布 raw / undistorted
   # 0: 关闭; 1: 开启
-  sendrgbcompressed: 1
+  sendrgbcompressed: 0
 
   # ===== RGB 图像（解码格式） =====
   # 发布解码后的 BGR8 格式图像，在主机端进行 JPEG 解码
   # 话题: /odin1/image
-  # 依赖: sendrgbcompressed 必须开启
+  # 与 sendrgbcompressed 已解耦：
+  # 开启 raw image 时，只会在确实需要 raw topic 时做 JPEG 解码
   # 0: 关闭; 1: 开启
   sendrgb: 1
 
   # ===== RGB 图像（去畸变） =====
   # 发布去畸变后的 RGB 图像，基于 calib.yaml 中的相机标定参数进行校正
-  # 话题: /odin1/image_undistort
-  # 依赖: sendrgb 必须开启
+  # 话题: /odin1/image/undistorted
+  # 与 sendrgb / sendrgbcompressed 已解耦：
+  # 若只需要 undistorted，则驱动可直接做“解码 + 去畸变 + 发布 undistorted”
   # 标定参数来源: config/calib.yaml（设备连接后自动生成）
   # 0: 关闭; 1: 开启
   sendrgbundistort: 1
+
+  # ===== RGB 输出降分辨率 =====
+  # 默认关闭，保持历史输出分辨率 1600x1296，避免下游依赖被破坏
+  # 开启后仅影响 /odin1/image 和 /odin1/image/undistorted
+  # 不影响 /odin1/image/compressed 的原始 JPEG 尺寸
+  # 0: 关闭; 1: 开启
+  rgb_output_downscale_enable: 0
+
+  # ===== RGB 输出目标宽度 =====
+  # 仅在 rgb_output_downscale_enable: 1 时生效
+  rgb_output_width: 1600
+
+  # ===== RGB 输出目标高度 =====
+  # 仅在 rgb_output_downscale_enable: 1 时生效
+  rgb_output_height: 1296
 
   # ============ 传感器数据 ============
 
@@ -49,18 +68,26 @@ register_keys:
   # 发布 IMU 惯性测量数据（加速度计 + 陀螺仪）
   # 话题: /odin1/imu
   # 0: 关闭; 1: 开启
-  sendimu: 1
+  sendimu: 0
 
   # ===== 里程计数据 =====
   # 发布设备位姿估计（位置 + 姿态四元数 + 速度 + 协方差）
   # 话题: /odin1/odometry
+  # 该开关只控制 odometry 话题本身，不再隐式控制 TF
   # 0: 关闭; 1: 开启
-  sendodom: 1
+  sendodom: 0
+
+  # ===== 高频里程计数据 =====
+  # 发布高频里程计
+  # 话题: /odin1/odometry_highfreq
+  # 0: 关闭; 1: 开启
+  sendodomhighfreq: 0
 
   # ===== 里程计到 base_link 的 TF 变换 =====
   # 发布 odom → base_link 的 TF 坐标变换
   # 对于在 RViz2 中正确显示 cloud_raw 点云至关重要
   # 除非有特殊需求，请保持开启
+  # 该开关只控制 TF，不依赖 /odin1/odometry 话题是否发布
   # 0: 关闭; 1: 开启
   send_odom_baselink_tf: 1
 
@@ -85,7 +112,7 @@ register_keys:
   # 100: 10 fps（较低帧率，适合静态场景，数据带宽较小）
   # 145: 14.5 fps（较高帧率，适合动态场景，但增加数据带宽）
   # 注意: 数值单位为实际帧率 × 10
-  dtof_fps: 145
+  dtof_fps: 100
 
   # ============ 高级点云处理 ============
 
@@ -101,15 +128,28 @@ register_keys:
   # 话题: /odin1/cloud_render
   # 在主机端处理，依赖 calib.yaml 中的相机外参
   # 0: 关闭; 1: 开启
-  sendcloudrender: 1
+  sendcloudrender: 0
 
   # ===== 稠密深度图补全 =====
   # 将稀疏点云投影到图像平面并生成稠密深度图
-  # 话题: /odin1/depth_img_completion（32FC1 格式）
+  # 话题: /odin1/depth_img_competetion（32FC1 格式）
   # 主机端处理，运算量较大，可能影响整体性能
   # 详情参见 README 文档中的深度图说明章节
-  # 0: 关闭; 1: 开启
+  # 0: 关闭; 1: 开启 依赖 senddtof
   senddepth: 1
+
+  # ===== 彩色深度点云 =====
+  # 将深度图再次反投影为彩色点云
+  # 话题: /odin1/depth_img_competetion_cloud
+  # 与 senddepth 已解耦，可单独关闭以减少深度节点计算量
+  # 0: 关闭; 1: 开启
+  senddepthcloud: 0
+
+  # ===== 深度图后处理 =====
+  # 1: 保持现有完整流程（恢复全分辨率 + Sobel + 阈值抑制噪声）
+  # 0: 保留合法 32FC1 输出与历史分辨率，但跳过 Sobel/阈值后处理
+  # 说明：关闭后通常能提升 /odin1/depth_img_competetion 帧率
+  depth_postprocess: 1
 
   # ===== 点云重投影 =====
   # 使用里程计位姿将 SLAM 点云投影到相机图像平面
@@ -181,7 +221,7 @@ register_keys:
   # ===== 强度灰度图 =====
   # 发布原始 DTOF 传感器强度数据的灰度图像，主要用于调试
   # 0: 关闭; 1: 开启
-  pubintensitygray: 1
+  pubintensitygray: 0
 
   # ===== 轨迹路径显示 =====
   # 在 RViz2 中发布并显示设备运动轨迹路径

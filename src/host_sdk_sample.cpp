@@ -110,12 +110,16 @@ int g_sendrgb = 1;
 int g_sendimu = 1;
 int g_senddtof = 1;
 int g_sendodom = 1;
+int g_sendodom_highfreq = 1;
 int g_send_odom_baselink_tf = 0;
 int g_sendcloudslam = 0;
 int g_sendcloudrender = 0;
 int g_sendrgb_compressed = 0;
 int g_sendrgb_undistort = 0;
 int g_record_data = 0;
+int g_rgb_output_downscale_enable = 0;
+int g_rgb_output_width = 1600;
+int g_rgb_output_height = 1296;
 int g_devstatus_log = 0;
 int g_pub_intensity_gray = 0;
 int g_show_path = 0;
@@ -190,6 +194,15 @@ static fpsHandle imu_rx_fps;
 static fpsHandle slam_cloud_rx_fps;
 static fpsHandle slam_odom_rx_fps;
 static fpsHandle slam_odom_highfreq_rx_fps;
+
+// 标准 odom 数据帧不仅用于 /odin1/odometry 话题，也用于 odom->base_link TF、
+// 路径可视化与相机位姿可视化，因此这里统一封装“是否需要处理标准里程计帧”的判断。
+static inline bool need_standard_odom_frames() {
+    return (g_sendodom != 0) ||
+           (g_send_odom_baselink_tf != 0) ||
+           (g_show_path != 0) ||
+           (g_show_camerapose != 0);
+}
 
 // ROS节点控制接口的具体实现类，管理DTOF子帧率、里程计TF发布及点云置信度阈值等参数
 class RosNodeControlImpl : public RosNodeControlInterface {
@@ -884,7 +897,9 @@ static void lidar_data_callback(const lidar_data_t *data, void *user_data)
             printf("empty lidar data type: %x\n", data->type);
             break;
         case LIDAR_DT_RAW_RGB:
-            if (g_sendrgb) {
+            // RGB 数据是否需要进入主机处理，不再只看 sendrgb：
+            // compressed / undistorted / cloud_render / 录制任一分支需要时都允许接收。
+            if (g_ros_object->shouldAcceptRgbFrames()) {
                 g_ros_object->publishRgb((capture_Image_List_t *)&data->stream);
             }
             update_count(&rgb_rx_fps);
@@ -912,7 +927,7 @@ static void lidar_data_callback(const lidar_data_t *data, void *user_data)
             update_count(&slam_cloud_rx_fps);
             break;
         case LIDAR_DT_SLAM_ODOMETRY:
-            if (g_sendodom) {
+            if (need_standard_odom_frames()) {
                 g_ros_object->publishOdometry((capture_Image_List_t *)&data->stream, OdometryType::STANDARD, g_show_path, g_show_camerapose);
             }
             update_count(&slam_odom_rx_fps);
@@ -1068,7 +1083,7 @@ static void lidar_data_callback(const lidar_data_t *data, void *user_data)
             break;
             case LIDAR_DT_SLAM_ODOMETRY_HIGHFREQ:
             {
-                if (g_sendodom) {
+                if (g_sendodom_highfreq) {
                     g_ros_object->publishOdometry((capture_Image_List_t *)&data->stream, OdometryType::HIGHFREQ, false, false);
                 }
                 update_count(&slam_odom_highfreq_rx_fps);
@@ -1465,7 +1480,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
             }
         }
 
-        if (calib_yaml_loaded) {
+        if (g_sendcloudrender && calib_yaml_loaded) {
             g_renderer = std::make_shared<rawCloudRender>();
             if (g_renderer->init(calib_yaml_node)) {
                 #ifdef ROS2
@@ -1480,12 +1495,19 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
                     ROS_ERROR("Failed to initialize point cloud renderer");
                 #endif
             }
-        } else {
+        } else if (g_sendcloudrender) {
             #ifdef ROS2
                 RCLCPP_WARN(rclcpp::get_logger("device_cb"),
                     "Renderer config file not found or parse failed: %s", calib_config.c_str());
             #else
                 ROS_WARN("Renderer config file not found or parse failed: %s", calib_config.c_str());
+            #endif
+        } else {
+            #ifdef ROS2
+                RCLCPP_INFO(rclcpp::get_logger("device_cb"),
+                    "cloud_render disabled, skip renderer initialization to avoid useless startup overhead");
+            #else
+                ROS_INFO("cloud_render disabled, skip renderer initialization to avoid useless startup overhead");
             #endif
         }
         
@@ -1662,7 +1684,7 @@ static void lidar_device_callback(const lidar_device_info_t* device, bool attach
         if (g_sendimu) {
             lidar_activate_stream_type(odinDevice, LIDAR_DT_RAW_IMU);
         }
-        if (g_sendodom) {
+        if (need_standard_odom_frames() || g_sendodom_highfreq) {
             lidar_activate_stream_type(odinDevice, LIDAR_DT_SLAM_ODOMETRY);
         }
         if (g_senddtof) {
@@ -1753,11 +1775,9 @@ int main(int argc, char *argv[])
 #ifdef ROS2
     rclcpp::init(argc, argv);
     auto node = std::make_shared<rclcpp::Node>("lydros_node");
-    g_ros_object = std::make_shared<MultiSensorPublisher>(node);
 #else
     ros::init(argc, argv, "lydros_node");
     ros::NodeHandle nh;
-    g_ros_object = new MultiSensorPublisher(nh);
 #endif
 
     // Register signal handlers for Ctrl+C
@@ -1817,11 +1837,15 @@ int main(int argc, char *argv[])
         g_rosNodeControlImpl.setCloudRawConfidenceThreshold(g_cloud_raw_confidence_threshold);
         g_dtof_fps      = get_key_value("dtof_fps", 145);  // Read DTOF frame rate from config (100=10fps, 145=14.5fps)
         g_sendodom      = get_key_value("sendodom", 1);
+        g_sendodom_highfreq = get_key_value("sendodomhighfreq", 1);
         g_send_odom_baselink_tf = get_key_value("send_odom_baselink_tf", 0);
         g_sendcloudslam = get_key_value("sendcloudslam", 0);
         g_sendcloudrender = get_key_value("sendcloudrender", 1);
         g_sendrgb_compressed = get_key_value("sendrgbcompressed", 1);
         g_sendrgb_undistort = get_key_value("sendrgbundistort", 0);
+        g_rgb_output_downscale_enable = get_key_value("rgb_output_downscale_enable", 0);
+        g_rgb_output_width = get_key_value("rgb_output_width", 1600);
+        g_rgb_output_height = get_key_value("rgb_output_height", 1296);
         g_record_data = get_key_value("recorddata", 0);
         g_show_fps = get_key_value("showfps", 0);
         g_devstatus_log = get_key_value("devstatuslog", 0);
@@ -1842,11 +1866,13 @@ int main(int argc, char *argv[])
             RCLCPP_INFO(rclcpp::get_logger("init"),
                 "[LOG] log_calib_intrinsics=%d, log_calib_extrinsics=%d (set via control_command.yaml)",
                 (int)g_log_calib_intrinsics, (int)g_log_calib_extrinsics);
+            RCLCPP_INFO(rclcpp::get_logger("init"),
+                "RGB outputs: sendrgb=%d sendrgbcompressed=%d sendrgbundistort=%d cloud_render=%d downscale=%d target=%dx%d",
+                g_sendrgb, g_sendrgb_compressed, g_sendrgb_undistort, g_sendcloudrender,
+                g_rgb_output_downscale_enable, g_rgb_output_width, g_rgb_output_height);
         #endif
 
-        if (g_send_odom_baselink_tf) {
-            g_rosNodeControlImpl.setSendOdomBaseLinkTF(true);
-        }
+        g_rosNodeControlImpl.setSendOdomBaseLinkTF(g_send_odom_baselink_tf != 0);
 
         auto get_key_str_value = [&](const std::string& key, const std::string& default_value) -> std::string {
             auto it = keys_w_str_val.find(key);
@@ -1858,6 +1884,14 @@ int main(int argc, char *argv[])
         g_mapping_result_file_name = get_key_str_value("mapping_result_file_name", "");
 
         g_custom_map_mode = g_parser->getCustomMapMode(2);
+
+        // publisher 的创建必须晚于配置加载。
+        // 否则即使控制项为 0，也会因为对象构造时无条件 create_publisher 而让 topic 仍然出现在图里。
+        #ifdef ROS2
+            g_ros_object = std::make_shared<MultiSensorPublisher>(node);
+        #else
+            g_ros_object = new MultiSensorPublisher(nh);
+        #endif
 
         lidar_log_set_level(LIDAR_LOG_INFO);
 
@@ -2010,7 +2044,7 @@ int main(int argc, char *argv[])
             }
             
             // Data processing when device is connected
-            if (g_sendcloudrender) {
+            if (g_ros_object->shouldRunCloudRender()) {
                 g_ros_object->try_process_pair();  
             }
             
@@ -2044,7 +2078,7 @@ int main(int argc, char *argv[])
             }
             
             // Data processing when device is connected
-            if (g_sendcloudrender) {
+            if (g_ros_object->shouldRunCloudRender()) {
                 g_ros_object->try_process_pair();  
             }
             
