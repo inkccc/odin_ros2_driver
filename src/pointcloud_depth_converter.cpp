@@ -150,7 +150,10 @@ cv::Mat PointCloudToDepthConverter::projectCloudToDepth(const pcl::PointCloud<pc
 
         if (u >= 0 && u < scaled_width_ && v >= 0 && v < scaled_height_)
         {
-            depth_img.at<float>(v, u) = static_cast<float>(camera_point.z);
+            float& center = depth_img.at<float>(v, u);
+            if (center == 0.0f || camera_point.z < center) {
+                center = static_cast<float>(camera_point.z);
+            }
 
             for (int du = -1; du <= 1; ++du)
             {
@@ -160,9 +163,9 @@ cv::Mat PointCloudToDepthConverter::projectCloudToDepth(const pcl::PointCloud<pc
                     int nv = v + dv;
                     if (nu >= 0 && nu < scaled_width_ && nv >= 0 && nv < scaled_height_)
                     {
-                        if (depth_img.at<float>(nv, nu) == 0.0f)
-                        {
-                            depth_img.at<float>(nv, nu) = static_cast<float>(camera_point.z);
+                        float& cell = depth_img.at<float>(nv, nu);
+                        if (cell == 0.0f || camera_point.z < cell) {
+                            cell = static_cast<float>(camera_point.z);
                         }
                     }
                 }

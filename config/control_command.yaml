@@ -28,7 +28,7 @@ register_keys:
   # 与 sendrgb / sendrgbundistort 已解耦：
   # 可单独开启 compressed，而不必同时发布 raw / undistorted
   # 0: 关闭; 1: 开启
-  sendrgbcompressed: 0
+  sendrgbcompressed: 0  
 
   # ===== RGB 图像（解码格式） =====
   # 发布解码后的 BGR8 格式图像，在主机端进行 JPEG 解码
@@ -113,6 +113,11 @@ register_keys:
   # 145: 14.5 fps（较高帧率，适合动态场景，但增加数据带宽）
   # 注意: 数值单位为实际帧率 × 10
   dtof_fps: 100
+
+  # ===== 传感器话题 QoS =====
+  # 将大数据话题（image / cloud）切换为 BEST_EFFORT，可在网络抖动时降低阻塞与背压
+  # 0: 可靠 (RELIABLE) ; 1: 尽力而为 (BEST_EFFORT) 修改后确保下游节点 QoS 设置匹配，否则可能导致数据无法传递
+  qos_best_effort_sensor: 0
 
   # ============ 高级点云处理 ============
 

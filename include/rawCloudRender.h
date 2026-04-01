@@ -53,7 +53,9 @@ public:
     void nv12buffer_2_rgb(buffer_List_t &image, std::vector<std::vector<float>>& rgb_image);
 
     // 将点云通过相机投影模型映射到图像，生成彩色点云（XYZRGB 展平格式）
-    void render(std::vector<std::vector<float>>& rgb_image, capture_Image_List_t* pcdStream, int pcdIdx, std::vector<float>& rgbCloud_flat);
+    // 优化版：直接接受扁平化的 BGR float 缓冲区，避免每帧重建二维 vector。
+    void render(const float* rgb_image_flat, int img_width, int img_height,
+                capture_Image_List_t* pcdStream, int pcdIdx, std::vector<float>& rgbCloud_flat);
 
     // 打印当前相机标定参数（用于调试）
     void print_camera_calib();

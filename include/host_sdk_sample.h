@@ -80,6 +80,7 @@ extern int g_senddtof;
 extern int g_sendodom;
 extern int g_sendodom_highfreq;
 extern int g_sendcloudslam;
+extern int g_qos_best_effort_sensor;
 extern int g_record_data;
 extern int g_rgb_output_downscale_enable;
 extern int g_rgb_output_width;
@@ -434,10 +435,6 @@ public:
                publisherHasSubscribers(undistort_rgb_pub_);
     }
 
-    bool hasCloudRenderSubscribers() const {
-        return publisherHasSubscribers(rgbcloud_pub_);
-    }
-
     // 只有在以下几种情况才值得为当前帧做 JPEG 解码：
     // 1. 需要发布 raw image
     // 2. 需要发布 undistorted image
@@ -446,6 +443,14 @@ public:
         return shouldPublishRawImage() ||
                shouldPublishUndistortedImage() ||
                shouldRunCloudRender();
+    }
+
+    bool hasCloudRenderSubscribers() const {
+        return publisherHasSubscribers(rgbcloud_pub_);
+    }
+
+    bool hasCloudRawSubscribers() const {
+        return publisherHasSubscribers(cloud_pub_);
     }
 
     // 显式分辨率降级开关。默认关闭，确保下游依赖旧分辨率时不受影响。
@@ -612,16 +617,16 @@ bool validate_render_parameters(std::vector<std::vector<float>>& rgb_image,
 }
 
 // 处理一对时间对齐的RGB图像和点云数据，渲染后发布彩色点云消息
-void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_msg)
-{
-    if (!publisherExists(rgbcloud_pub_)) {
-        return;
-    }
+    void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_msg)
+    {
+        if (!publisherExists(rgbcloud_pub_)) {
+            return;
+        }
 
     auto start_time = std::chrono::steady_clock::now();
 
-    const int input_image_width = rgb_msg->width;
-    const int input_image_height = rgb_msg->height;
+        const int input_image_width = rgb_msg->width;
+        const int input_image_height = rgb_msg->height;
 
     // Verify input image format
     if (rgb_msg->encoding != "bgr8") {
@@ -633,17 +638,17 @@ void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_m
     }
 
     // Prepare point cloud data stream
-    capture_Image_List_t cloud_stream;
-    const int pcd_idx = 2;
-    cloud_stream.imageList[pcd_idx].height = pcd_msg->height;
-    cloud_stream.imageList[pcd_idx].width = pcd_msg->width;
+        capture_Image_List_t cloud_stream;
+        const int pcd_idx = 2;
+        cloud_stream.imageList[pcd_idx].height = pcd_msg->height;
+        cloud_stream.imageList[pcd_idx].width = pcd_msg->width;
 
     const auto total_point_num = pcd_msg->width * pcd_msg->height;
     sensor_msgs::PointCloud2ConstIterator<float> iter_x(*pcd_msg, "x");
     sensor_msgs::PointCloud2ConstIterator<float> iter_y(*pcd_msg, "y");
     sensor_msgs::PointCloud2ConstIterator<float> iter_z(*pcd_msg, "z");
-    std::vector<float> cloud_flat;
-    cloud_flat.reserve(total_point_num * 4);
+        std::vector<float> cloud_flat;
+        cloud_flat.reserve(total_point_num * 4);
 
     for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
         cloud_flat.push_back(*iter_y * -1000.0f);
@@ -651,36 +656,30 @@ void process_pair(const ImageConstPtr &rgb_msg, const PointCloud2ConstPtr &pcd_m
         cloud_flat.push_back(*iter_x * 1000.0f);
         cloud_flat.push_back(0.0f);
     }
-    cloud_stream.imageList[pcd_idx].pAddr = cloud_flat.data();
+        cloud_stream.imageList[pcd_idx].pAddr = cloud_flat.data();
 
     
-    if (input_image_height > 0 && input_image_width > 0) {
-        // Use BGR8 image data directly
-        std::vector<std::vector<float>> rgb_image(input_image_height, std::vector<float>(input_image_width));
-        
-        // Convert BGR8 data to required format for rendering
-        const uint8_t* bgr_data = rgb_msg->data.data();
-        for (int y = 0; y < input_image_height; ++y) {
-            for (int x = 0; x < input_image_width; ++x) {
-                // Start position of each pixel (BGR format)
-                int idx = y * rgb_msg->step + x * 3;
-                
-                // Extract RGB values and combine into 32-bit integer
-                uint8_t b = bgr_data[idx];
-                uint8_t g = bgr_data[idx + 1];
-                uint8_t r = bgr_data[idx + 2];
-                uint32_t rgb_int = (r << 16) | (g << 8) | b;
-                
-                // Convert to float
-                float rgb_float;
-                std::memcpy(&rgb_float, &rgb_int, sizeof(float));
-                rgb_image[y][x] = rgb_float;
+        if (input_image_height > 0 && input_image_width > 0) {
+            // 用单层连续缓冲区存放 RGB packed float，减少双层 vector 带来的频繁分配
+            std::vector<float> rgb_flat(static_cast<size_t>(input_image_height) * input_image_width);
+            
+            // Convert BGR8 data to packed float (same layout as原实现，但连续内存)
+            const uint8_t* bgr_data = rgb_msg->data.data();
+            for (int y = 0; y < input_image_height; ++y) {
+                const uint8_t* row = bgr_data + y * rgb_msg->step;
+                float* out = rgb_flat.data() + static_cast<size_t>(y) * input_image_width;
+                for (int x = 0; x < input_image_width; ++x) {
+                    const uint8_t b = row[x * 3 + 0];
+                    const uint8_t g = row[x * 3 + 1];
+                    const uint8_t r = row[x * 3 + 2];
+                    const uint32_t rgb_int = (r << 16) | (g << 8) | b;
+                    std::memcpy(out + x, &rgb_int, sizeof(uint32_t));
+                }
             }
-        }
-        // Render colored point cloud
-        std::vector<float> rgbCloud_flat;
-        render_.render(rgb_image, &cloud_stream, pcd_idx, rgbCloud_flat);
-        const int valid_point_num = rgbCloud_flat.size() / 4;
+            // Render colored point cloud
+            std::vector<float> rgbCloud_flat;
+            render_.render(rgb_flat.data(), input_image_width, input_image_height, &cloud_stream, pcd_idx, rgbCloud_flat);
+            const int valid_point_num = rgbCloud_flat.size() / 4;
          
         // Create and publish RGB point cloud
         PointCloud2Msg output_msg;
@@ -868,6 +867,9 @@ void publishIntensityCloud(capture_Image_List_t* stream, int idx)
         pcd_queue_.clear();
         pcd_queue_.push_back(msg_copy);
     }
+    if (shouldRunCloudRender()) {
+        try_process_pair();
+    }
 
     // Publish point cloud
     #ifdef ROS2
@@ -1006,6 +1008,10 @@ void processRgbTask(const RgbFrameTask& task) {
         std::lock_guard<std::mutex> lock(rgb_queue_mutex_);
         rgb_image_queue_.clear();
         rgb_image_queue_.push_back(full_res_cv_image.toImageMsg());
+    }
+    // 尝试立即配对最新 RGB 与点云，避免依赖主线程 10Hz 轮询
+    if (shouldRunCloudRender()) {
+        try_process_pair();
     }
 
     const cv::Size publish_size = getRgbOutputSize(decoded_image.cols, decoded_image.rows);
@@ -1850,12 +1856,14 @@ private:
         #ifdef ROS2
             // Small data with queue depth 1
             auto qos_small = rclcpp::QoS(1)
-                                    .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
+                                    .reliability(g_qos_best_effort_sensor ? RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT
+                                                                           : RMW_QOS_POLICY_RELIABILITY_RELIABLE)
                                     .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
 
             // Large sensor data with larger queue to avoid blocking
             auto qos_sensor = rclcpp::QoS(10)
-                                    .reliability(RMW_QOS_POLICY_RELIABILITY_RELIABLE)
+                                    .reliability(g_qos_best_effort_sensor ? RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT
+                                                                           : RMW_QOS_POLICY_RELIABILITY_RELIABLE)
                                     .durability(RMW_QOS_POLICY_DURABILITY_VOLATILE);
 
             // 这里故意只为启动配置中“已启用”的功能创建 publisher。

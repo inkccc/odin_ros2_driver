@@ -171,7 +171,9 @@ bool rawCloudRender::init(const std::string& yamlFilePath) {
 }
 // 将原始 DTOF 点云通过相机外参投影到 RGB 图像，生成彩色点云（XYZRGB 格式）
 // rgb_image: 输入 RGB 图像数据; pcd_stream: 点云数据流; pcdIdx: 帧索引; rgbCloud_flat: 输出彩色点云
-void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
+void rawCloudRender::render(const float* rgb_image_flat,
+                           int img_width,
+                           int img_height,
                            capture_Image_List_t* pcd_stream, 
                            int pcdIdx, 
                            std::vector<float>& rgbCloud_flat) 
@@ -226,10 +228,6 @@ void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
     rgbCloud_flat.clear();
     rgbCloud_flat.resize(total_points * 4); // Preallocate maximum space
     float* output_ptr = rgbCloud_flat.data();
-    
-    // Get image dimensions
-    const int img_height = 1296;
-    const int img_width = 1600;
     
     // Process point cloud
     int valid_count = 0;
@@ -290,11 +288,12 @@ void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
         }
         
         // Safe image data access
-        if (v < static_cast<int>(rgb_image.size()) && u < static_cast<int>(rgb_image[v].size())) {
+        const size_t rgb_idx = static_cast<size_t>(v) * img_width + u;
+        if (rgb_idx < static_cast<size_t>(img_width) * img_height) {
             *output_ptr++ = x;
             *output_ptr++ = y;
             *output_ptr++ = z;
-            *output_ptr++ = rgb_image[v][u];
+            *output_ptr++ = rgb_image_flat[rgb_idx];
             valid_count++;
         } else {
             // Handle invalid coordinates
@@ -303,8 +302,7 @@ void rawCloudRender::render(std::vector<std::vector<float>>& rgb_image,
             	if(raw_debug)
             	{
             	          std::cerr << "WARNING: Invalid image coordinates: u=" << u << ", v=" << v 
-                          << " (image size: " << rgb_image.size() << "x" 
-                          << (rgb_image.empty() ? 0 : rgb_image[0].size()) << ")" << std::endl;
+                          << " (image size: " << img_height << "x" << img_width << ")" << std::endl;
             	}
 
                 warned = true;

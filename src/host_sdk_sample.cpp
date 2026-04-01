@@ -110,10 +110,11 @@ int g_sendrgb = 1;
 int g_sendimu = 1;
 int g_senddtof = 1;
 int g_sendodom = 1;
-int g_sendodom_highfreq = 1;
+int g_sendodom_highfreq = 0;
 int g_send_odom_baselink_tf = 0;
 int g_sendcloudslam = 0;
 int g_sendcloudrender = 0;
+int g_qos_best_effort_sensor = 0;
 int g_sendrgb_compressed = 0;
 int g_sendrgb_undistort = 0;
 int g_record_data = 0;
@@ -202,6 +203,15 @@ static inline bool need_standard_odom_frames() {
            (g_send_odom_baselink_tf != 0) ||
            (g_show_path != 0) ||
            (g_show_camerapose != 0);
+}
+
+// DTOF 点云是否需要被主机侧消费：仅当有真实消费者（话题订阅者、cloud_render、强度图或录制）时再做重计算。
+static inline bool need_dtof_processing() {
+    return g_pub_intensity_gray != 0 ||
+           g_sendcloudrender != 0 ||
+           g_record_data != 0 ||
+           (g_ros_object && g_ros_object->hasCloudRenderSubscribers()) ||
+           (g_ros_object && g_ros_object->hasCloudRawSubscribers());
 }
 
 // ROS节点控制接口的具体实现类，管理DTOF子帧率、里程计TF发布及点云置信度阈值等参数
@@ -912,6 +922,9 @@ static void lidar_data_callback(const lidar_data_t *data, void *user_data)
             update_count(&imu_rx_fps);
             break;
         case LIDAR_DT_RAW_DTOF:
+            if (!need_dtof_processing()) {
+                break;
+            }
             if (g_senddtof ) {
                 g_ros_object->publishIntensityCloud((capture_Image_List_t *)&data->stream, 1);
             }
@@ -1839,6 +1852,7 @@ int main(int argc, char *argv[])
         g_sendodom      = get_key_value("sendodom", 1);
         g_sendodom_highfreq = get_key_value("sendodomhighfreq", 1);
         g_send_odom_baselink_tf = get_key_value("send_odom_baselink_tf", 0);
+        g_qos_best_effort_sensor = get_key_value("qos_best_effort_sensor", 0);
         g_sendcloudslam = get_key_value("sendcloudslam", 0);
         g_sendcloudrender = get_key_value("sendcloudrender", 1);
         g_sendrgb_compressed = get_key_value("sendrgbcompressed", 1);
