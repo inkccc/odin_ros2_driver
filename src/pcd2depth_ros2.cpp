@@ -18,6 +18,7 @@ limitations under the License.
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <filesystem>
 #include "depth_image_ros2_node.hpp"
 #include <rcpputils/filesystem_helper.hpp>
 // 检查指定路径的文件是否存在
@@ -136,6 +137,33 @@ std::string get_package_source_directory() {
     
     return path.string();
 }
+
+// 解析最终生效的 control_command.yaml 路径。
+// 优先使用 launch 传入 config_file，未传或路径错误时回退默认配置并打印 WARN。
+static std::string resolve_control_config_path(
+    const std::shared_ptr<rclcpp::Node>& node,
+    const std::string& default_config_file)
+{
+    std::string external_config_file = node->declare_parameter<std::string>("config_file", "");
+
+    if (external_config_file.empty()) {
+        RCLCPP_WARN(node->get_logger(),
+            "[config] launch 参数 `config_file` 未传递，回退到驱动默认配置: %s",
+            default_config_file.c_str());
+        return default_config_file;
+    }
+
+    if (!std::filesystem::exists(external_config_file)) {
+        RCLCPP_WARN(node->get_logger(),
+            "[config] launch 参数 `config_file` 路径无效: %s，回退到驱动默认配置: %s",
+            external_config_file.c_str(), default_config_file.c_str());
+        return default_config_file;
+    }
+
+    RCLCPP_INFO(node->get_logger(),
+        "[config] 使用 launch 传入配置文件: %s", external_config_file.c_str());
+    return external_config_file;
+}
 // 主函数：读取配置确认是否启用深度图，等待 calib.yaml 生成后加载标定参数并启动深度图节点
 int main(int argc, char **argv)
 {
@@ -147,10 +175,23 @@ int main(int argc, char **argv)
     std::string package_path = get_package_source_directory();
     RCLCPP_INFO(node->get_logger(), "Package path: %s", package_path.c_str());
     
-    std::string config_file = package_path + "/config/control_command.yaml";
+    std::string default_config_file = package_path + "/config/control_command.yaml";
+    std::string config_file = resolve_control_config_path(node, default_config_file);
     RCLCPP_INFO(node->get_logger(), "Loading config from: %s", config_file.c_str());
-
-    YAML::Node config = YAML::LoadFile(config_file);
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(config_file);
+    } catch (const std::exception& e) {
+        if (config_file != default_config_file) {
+            RCLCPP_WARN(node->get_logger(),
+                "[config] 外部配置解析失败: %s，回退到驱动默认配置: %s，err=%s",
+                config_file.c_str(), default_config_file.c_str(), e.what());
+            config_file = default_config_file;
+            config = YAML::LoadFile(config_file);
+        } else {
+            throw;
+        }
+    }
         
     if (!config["register_keys"]) {
             throw std::runtime_error("Missing 'register_keys' section");

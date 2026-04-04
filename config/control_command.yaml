@@ -6,14 +6,14 @@ register_keys:
   # 0: 关闭（即使 USB 2.0 也允许连接，但 SLAM 模式下可能不稳定）
   # 1: 开启（非 USB 3.0 连接时拒绝启动，推荐在生产环境中使用）
   # 注意：SLAM 模式下建议使用 USB 3.0，以确保地图文件传输可靠性
-  strict_usb3.0_check: 0
+  strict_usb3.0_check: 1
 
   # ===== 时间戳同步模式 =====
   # 控制数据时间戳的来源和同步方式
   # 0: 使用设备内部时间（推荐，时间戳最准确）
   # 1: 使用主机 ROS 时间（接收时打时间戳，不推荐，会引入网络延迟误差）
   # 2: 将设备时间对齐到主机时间轴（类 PTP 同步，时间戳为主机时间轴上的接收时刻）
-  use_host_ros_time: 1
+  use_host_ros_time: 2
 
   # ===== 数据流总开关 =====
   # 0: 停止所有数据流
@@ -176,7 +176,7 @@ register_keys:
   # 将设备运行状态（温度、CPU 使用率、内存、各数据流帧率等）保存为 CSV 文件
   # 保存路径: {工作空间}/src/odin_ros2_driver/log/Driver_{启动时间}/Conn_{连接时间}/dev_status.csv
   # 0: 关闭; 1: 开启
-  devstatuslog: 0
+  devstatuslog: 1
 
   # ===== SDK 调试日志 =====
   # 开启底层 SDK 的详细调试日志输出

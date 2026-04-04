@@ -17,6 +17,7 @@ limitations under the License.
 #include <sys/stat.h>
 #include <thread>
 #include <chrono>
+#include <filesystem>
 
 #ifdef ROS2
     #include <functional>
@@ -51,6 +52,31 @@ static std::string get_package_source_directory() {
         return current_file.substr(0, pos);
     }
     return "";
+}
+
+// 解析最终生效的 control_command.yaml 路径。
+// 优先使用 launch 传入 config_file；若未传或路径无效，回退默认配置并打印 WARN。
+static std::string resolve_control_config_path(
+    const rclcpp::Logger& logger,
+    const std::string& external_config_file,
+    const std::string& default_config_file)
+{
+    if (external_config_file.empty()) {
+        RCLCPP_WARN(logger,
+            "[config] launch 参数 `config_file` 未传递，回退到驱动默认配置: %s",
+            default_config_file.c_str());
+        return default_config_file;
+    }
+
+    if (!std::filesystem::exists(external_config_file)) {
+        RCLCPP_WARN(logger,
+            "[config] launch 参数 `config_file` 路径无效: %s，回退到驱动默认配置: %s",
+            external_config_file.c_str(), default_config_file.c_str());
+        return default_config_file;
+    }
+
+    RCLCPP_INFO(logger, "[config] 使用 launch 传入配置文件: %s", external_config_file.c_str());
+    return external_config_file;
 }
 
 // ==================== ROS2 Implementation ====================
@@ -93,12 +119,17 @@ void CloudReprojectionRosNode::loadParameters()
     // Load camera parameters from calib.yaml file directly
     std::string package_path = get_package_source_directory();
     std::string calib_file = package_path + "/config/calib.yaml";
+    std::string default_config_file = package_path + "/config/control_command.yaml";
+    std::string external_config_file = this->declare_parameter<std::string>("config_file", "");
+    std::string config_file = resolve_control_config_path(
+        this->get_logger(), external_config_file, default_config_file
+    );
 
     // [LOG] 读取日志控制 flag（来自 control_command.yaml）
     bool log_calib_intrinsics = false;
     bool log_calib_extrinsics = false;
     try {
-        YAML::Node cmd_config = YAML::LoadFile(package_path + "/config/control_command.yaml");
+        YAML::Node cmd_config = YAML::LoadFile(config_file);
         auto get_flag = [&](const std::string& key, int def) -> int {
             if (cmd_config["register_keys"] && cmd_config["register_keys"][key]) {
                 try { return cmd_config["register_keys"][key].as<int>(); } catch (...) {}
@@ -107,7 +138,24 @@ void CloudReprojectionRosNode::loadParameters()
         };
         log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
         log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
-    } catch (...) { /* 读取失败时保持默认值 false */ }
+    } catch (const std::exception& e) {
+        if (config_file != default_config_file) {
+            RCLCPP_WARN(this->get_logger(),
+                "[config] 外部配置解析失败: %s，回退到驱动默认配置: %s，err=%s",
+                config_file.c_str(), default_config_file.c_str(), e.what());
+            try {
+                YAML::Node cmd_config = YAML::LoadFile(default_config_file);
+                auto get_flag = [&](const std::string& key, int def) -> int {
+                    if (cmd_config["register_keys"] && cmd_config["register_keys"][key]) {
+                        try { return cmd_config["register_keys"][key].as<int>(); } catch (...) {}
+                    }
+                    return def;
+                };
+                log_calib_intrinsics = get_flag("log_calib_intrinsics", 0) != 0;
+                log_calib_extrinsics = get_flag("log_calib_extrinsics", 0) != 0;
+            } catch (...) { /* 兜底失败时保持默认值 false */ }
+        }
+    }
 
     YAML::Node calib_config;
     try {
@@ -232,7 +280,11 @@ int main(int argc, char** argv)
     
     // Check if reprojection is enabled from control_command.yaml
     std::string package_path = get_package_source_directory();
-    std::string config_file = package_path + "/config/control_command.yaml";
+    std::string default_config_file = package_path + "/config/control_command.yaml";
+    std::string external_config_file = temp_node->declare_parameter<std::string>("config_file", "");
+    std::string config_file = resolve_control_config_path(
+        temp_node->get_logger(), external_config_file, default_config_file
+    );
 
     // [LOG] 日志控制 flag，从 control_command.yaml 读取
     bool log_calib_intrinsics = false;
@@ -240,7 +292,20 @@ int main(int argc, char** argv)
     bool log_calib_waiting    = true;  // 默认开启等待轮询日志
 
     try {
-        YAML::Node config = YAML::LoadFile(config_file);
+        YAML::Node config;
+        try {
+            config = YAML::LoadFile(config_file);
+        } catch (const std::exception& e) {
+            if (config_file != default_config_file) {
+                RCLCPP_WARN(temp_node->get_logger(),
+                    "[config] 外部配置解析失败: %s，回退到驱动默认配置: %s，err=%s",
+                    config_file.c_str(), default_config_file.c_str(), e.what());
+                config_file = default_config_file;
+                config = YAML::LoadFile(config_file);
+            } else {
+                throw;
+            }
+        }
         if (!config["register_keys"] || !config["register_keys"]["sendreprojection"]) {
             RCLCPP_INFO(temp_node->get_logger(), "sendreprojection parameter not found, cloud reprojection disabled.");
             rclcpp::shutdown();
@@ -301,7 +366,13 @@ int main(int argc, char** argv)
     
     RCLCPP_INFO(temp_node->get_logger(), "Found calib.yaml file! Starting cloud reprojection node...");
 
-    auto node = std::make_shared<CloudReprojectionRosNode>();
+    // 将最终生效的 config_file 通过 NodeOptions 显式传给 CloudReprojectionRosNode，
+    // 保证 main() 与 loadParameters() 使用同一配置来源，避免再次出现配置源分叉。
+    rclcpp::NodeOptions options;
+    options.parameter_overrides({
+        rclcpp::Parameter("config_file", config_file)
+    });
+    auto node = std::make_shared<CloudReprojectionRosNode>(options);
 
     RCLCPP_INFO(node->get_logger(), "CloudReprojectionRosNode started");
 

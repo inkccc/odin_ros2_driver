@@ -863,6 +863,35 @@ std::string get_package_source_directory() {
     return path.string();
 }
 
+// 解析最终生效的 control_command.yaml 路径。
+// 规则：
+// 1) 若 launch 传入 config_file 且文件存在，优先使用该路径（实现跨包松耦合配置）。
+// 2) 若未传或路径无效，回退到驱动默认配置，并打印 WARN，避免静默误用。
+static std::string resolve_control_config_path(
+    const rclcpp::Node::SharedPtr& node,
+    const std::string& default_config_file)
+{
+    std::string external_config_file = node->declare_parameter<std::string>("config_file", "");
+
+    if (external_config_file.empty()) {
+        RCLCPP_WARN(node->get_logger(),
+            "[config] launch 参数 `config_file` 未传递，回退到驱动默认配置: %s",
+            default_config_file.c_str());
+        return default_config_file;
+    }
+
+    if (!std::filesystem::exists(external_config_file)) {
+        RCLCPP_WARN(node->get_logger(),
+            "[config] launch 参数 `config_file` 路径无效: %s，回退到驱动默认配置: %s",
+            external_config_file.c_str(), default_config_file.c_str());
+        return default_config_file;
+    }
+
+    RCLCPP_INFO(node->get_logger(),
+        "[config] 使用 launch 传入配置文件: %s", external_config_file.c_str());
+    return external_config_file;
+}
+
 
 // 获取ROS软件包路径（兼容ROS1和ROS2）
 std::string get_package_path(const std::string& package_name) {
@@ -1805,7 +1834,8 @@ int main(int argc, char *argv[])
     	std::string package_path = get_package_share_path("odin_ros2_driver");
     #endif
         std::string config_dir = package_path + "/config";
-        std::string config_file = config_dir + "/control_command.yaml";
+        std::string default_config_file = config_dir + "/control_command.yaml";
+        std::string config_file = resolve_control_config_path(node, default_config_file);
 
         // Initialize command file path to /tmp/odin_command.txt
         g_command_file_path = "/tmp/odin_command.txt";
@@ -1817,12 +1847,22 @@ int main(int argc, char *argv[])
         #endif
 
         g_parser = std::make_shared<odin_ros2_driver::YamlParser>(config_file);
-        if (!g_parser->loadConfig()) {
-            #ifdef ROS2
-                RCLCPP_ERROR(node->get_logger(), "Failed to load config file: %s", config_file.c_str());
-            #else
-                ROS_ERROR("Failed to load config file: %s", config_file.c_str());
-            #endif
+        bool config_loaded = g_parser->loadConfig();
+        if (!config_loaded) {
+            // 外部配置存在但解析失败时，自动回退默认配置，避免“传了路径但整节点启动失败”。
+            // 若默认配置也失败，则按原逻辑直接退出。
+            if (config_file != default_config_file) {
+                RCLCPP_WARN(node->get_logger(),
+                    "[config] 外部配置加载失败: %s，回退到驱动默认配置: %s",
+                    config_file.c_str(), default_config_file.c_str());
+                config_file = default_config_file;
+                g_parser = std::make_shared<odin_ros2_driver::YamlParser>(config_file);
+                config_loaded = g_parser->loadConfig();
+            }
+        }
+        if (!config_loaded) {
+            RCLCPP_ERROR(node->get_logger(),
+                "Failed to load config file (including fallback): %s", config_file.c_str());
             return -1;
         }
 
